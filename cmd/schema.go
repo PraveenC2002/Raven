@@ -70,7 +70,12 @@ type connectionInfo struct {
 }
 
 type diagnoseResult struct {
-	stdout string `db:"stdout"`
-	stderr string `db:"stderr"`
-	exitCode int `db:"exit_code"`
+	stdout   string `db:"stdout"`
+	stderr   string `db:"stderr"`
+	exitCode int    `db:"exit_code"`
+}
+
+type owner struct {
+	id    int `db:"id"`
+	ownerId tgId `db:"owner_id"`
 }

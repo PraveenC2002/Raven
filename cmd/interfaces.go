@@ -17,5 +17,13 @@ type Diagnoser interface{
 	closeConn() error
 }
 
-type Registry interface{}
+type Registry interface{
+	initUser(*owner) error
+	addVm(*machine) error
+	removeVm(string) error
+	getVm(string) (*machine, error)
+	listVm() ([]*machine, error)
+	updateVm(*machine) error
+}
+
 type Auditor interface{}

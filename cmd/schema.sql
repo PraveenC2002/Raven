@@ -1,0 +1,17 @@
+
+CREATE TABLE IF NOT EXISTS machines (
+	id TEXT PRIMARY KEY,
+	name TEXT UNIQUE NOT NULL,
+	description TEXT NOT NULL,
+	created_at TIMESTAMP NOT NULL,
+	host TEXT NOT NULL,
+	port INTEGER NOT NULL CHECK(port > 0),
+	ssh_user TEXT NOT NULL,
+	key_path TEXT NOT NULL,
+	host_key TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS owner (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    owner_id INTEGER NOT NULL
+);
