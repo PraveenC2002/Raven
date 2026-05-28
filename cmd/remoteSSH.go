@@ -9,11 +9,11 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-type diagnoser struct {
+type remoteSSH struct {
 	client *ssh.Client
 }
 
-func newDiagnoser(connInfo *connectionInfo) (*diagnoser, error) {
+func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 
 	pvKey, err := os.ReadFile(connInfo.keyPath)
 	if err != nil {
@@ -48,16 +48,16 @@ func newDiagnoser(connInfo *connectionInfo) (*diagnoser, error) {
 		return nil, err
 	}
 	
-	return &diagnoser{
+	return &remoteSSH{
 		client: client,
 	}, nil
 }
 
 
 // TODO: shell command timeout
-func (d *diagnoser) execute(cmd string) (*diagnoseResult, error) {
+func (r *remoteSSH) execute(cmd string) (*sshOutput, error) {
 
-	sess, err := d.client.NewSession()
+	sess, err := r.client.NewSession()
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +68,7 @@ func (d *diagnoser) execute(cmd string) (*diagnoseResult, error) {
 
 	var exitErr *ssh.ExitError
 	if errors.As(err, &exitErr) {
-		return &diagnoseResult{
+		return &sshOutput{
 			output: resText,
 			exitCode: exitErr.ExitStatus(),
 		}, nil
@@ -78,13 +78,13 @@ func (d *diagnoser) execute(cmd string) (*diagnoseResult, error) {
 		return nil , err
 	}
 
-	return &diagnoseResult{
+	return &sshOutput{
 		output: resText,
 		exitCode: 0,
 	}, nil
 
 }
 
-func (d *diagnoser) closeConn() error {
-	return d.client.Close()
+func (r *remoteSSH) closeConn() error {
+	return r.client.Close()
 }

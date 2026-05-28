@@ -1,4 +1,4 @@
-[denylist]
+[denyList]
   	exact = [
     	"/etc/shadow",
      	"/etc/gshadow",
@@ -16,12 +16,6 @@
         '/\.bash_history$',
         '/\.zsh_history$',
     ]
-
-[regexes]
-	path = '^/[a-zA-Z0-9_/.\-]+$'
-	positive_int = '^[1-9][0-9]*$'
-	search_term = '^[a-zA-Z0-9_ .\-]+$'
-	filename_glob = '^[a-zA-Z0-9_*.\-]+$'
 
 # Identity and context
 
@@ -664,3 +658,5 @@
 	name = "swapon"
 	description = "Shows swap usage"
 	flags = ['--show', '-s']
+
+	

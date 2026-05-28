@@ -12,12 +12,12 @@ type LLM interface {}
 
 type Bouncer interface{
 	validate(string) error
-	describe() (string, error)
+	describe() string
 }
 
-type Diagnoser interface{
+type RemoteSSH interface{
 	newConn(*connectionInfo) error
-	execute(string) (*diagnoseResult, error)
+	execute(string) (*sshOutput, error)
 	closeConn() error
 }
 

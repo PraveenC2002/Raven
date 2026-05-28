@@ -1,6 +1,7 @@
 package main
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,7 +70,7 @@ type connectionInfo struct {
 	hostKey string `db:"host_key"`
 }
 
-type diagnoseResult struct {
+type sshOutput struct {
 	output   string `db:"output"`
 	exitCode int    `db:"exit_code"`
 }
@@ -77,4 +78,41 @@ type diagnoseResult struct {
 type owner struct {
 	id      int  `db:"id"`
 	ownerId tgId `db:"owner_id"`
+}
+
+type shellFlag struct {
+	Name       string `toml:"name"`
+	TakesVal   bool   `toml:"takesVal"`
+	Glued      bool   `toml:"glued"`
+	Value      string `toml:"value"`
+	ValueRegex *regexp.Regexp
+}
+
+type shellPositional struct {
+	Required           bool     `toml:"required"`
+	AcceptPattern      []string `toml:"acceptPattern"`
+	AcceptPatternRegex []*regexp.Regexp
+	RejectPattern      []string `toml:"rejectPattern"`
+	RejectPatternRegex []*regexp.Regexp
+	RejectList         []string `toml:"rejectList"`
+}
+
+type shellCommand struct {
+	Name        string       `toml:"name"`
+	Description string       `toml:"description"`
+	Flags       []*shellFlag `toml:"flags"`
+	FlagsMap    map[string]*shellFlag
+	Positionals []*shellPositional `toml:"positionals"`
+}
+
+type shellDenyList struct {
+	exact         []string `toml:"exact"`
+	patterns      []string `toml:"patterns"`
+	patternsRegex []*regexp.Regexp
+}
+
+type shellPolicy struct {
+	Commands    []*shellCommand `toml:"commands"`
+	CommandsMap map[string]*shellCommand
+	denyList    *shellDenyList `toml:"denyList"`
 }
