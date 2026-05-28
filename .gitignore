@@ -2,3 +2,6 @@
 .env.test
 app/
 assets/
+*.md
+!readme.md
+.obsidian

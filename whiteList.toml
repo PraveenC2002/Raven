@@ -1,0 +1,666 @@
+[denylist]
+  	exact = [
+    	"/etc/shadow",
+     	"/etc/gshadow",
+      	"/etc/sudoers",
+   	]
+    patterns = [
+    	'/etc/sudoers\.d/',
+     	'/proc/self/environ$',
+      	'/proc/[0-9]+/environ$',
+       	'/\.ssh/',
+        '/\.env($|\.)',
+        '\.(key|pem|p12|pfx)$',
+        '/id_(rsa|ed25519|ecdsa|dsa)($|\.)',
+        '/etc/ssh/ssh_host_\w+_key$',
+        '/\.bash_history$',
+        '/\.zsh_history$',
+    ]
+
+[regexes]
+	path = '^/[a-zA-Z0-9_/.\-]+$'
+	positive_int = '^[1-9][0-9]*$'
+	search_term = '^[a-zA-Z0-9_ .\-]+$'
+	filename_glob = '^[a-zA-Z0-9_*.\-]+$'
+
+# Identity and context
+
+[[commands]]
+	name = "pwd"
+	description = "print working directory"
+
+[[commands]]
+	name = "whoami"
+	description = "print current user"
+
+[[commands]]
+	name = "hostname"
+	description = "print machine's hostname"
+
+[[commands]]
+	name = "uname"
+	description = "kernel and architecture info"
+	flags = ['-a']
+
+[[commands]]
+	name = "date"
+	description = "current date and time"
+
+[[commands]]
+	name = "uptime"
+	description = "how long the system has been running and average load"
+
+# file reading
+[[commands]]
+	name = "cat"
+	description = "print file contents to stdout"
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+
+[[commands]]
+	name = "head"
+	description = "print first 10 lines (default) of file to stdout"
+	[[commands.flags]]
+		name = '-n'
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+
+[[commands]]
+	name = "tail"
+	description = "print last 10 lines (default) of file to stdout"
+	[[commands.flags]]
+		name = '-n'
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "wc"
+	description = "count lines, words and bytes"
+	flags = ['-l', '-w', '-c']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "ls"
+	description = "lists directory contents"
+	flags = ['-l', '-a', '-h', '-t', '-la', '-lah', '-lath']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "grep"
+	description = "print lines from a file (or recursively across files) that match a pattern"
+	flags = ['-i', '-n', '-r', '-v']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^[a-zA-Z0-9_ .\-]+$']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "find"
+	description = "walks the filesystem starting from <path> and prints any file matching the given conditions."
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+	[[commands.flags]]
+		name = "-name"
+		takesVal = true
+		value = '^[a-zA-Z0-9_*.\-]+$'
+	[[commands.flags]]
+		name = "-type"
+		takesVal = true
+		value = '^(f|d)$'
+	[[commands.flags]]
+		name = "-mtime"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+
+[[commands]]
+	name = "file"
+	description = "identifies file type"
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+# System V Style (SysV) not BSD
+[[commands]]
+	name = "ps"
+	description = "gives a snapshot of the running process"
+	flags = ['-e', '-f']
+	[[commands.flags]]
+		name = "-p"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.flags]]
+		name = "-C"
+		takesVal = true
+		value = '^[a-zA-Z0-9_\-]+$'
+	[[commands.flags]]
+		name = "-o"
+		takesVal = true
+		value = '^[a-z%,]+$'
+	[[commands.flags]]
+		name = "--sort"
+		takesVal = true
+		glued = true
+		value = '^-?(%cpu|%mem|rss|vsz|pid|time)$'
+
+[[commands]]
+	name = "pgrep"
+	description = "search for processes whose name matches and print their PIDs"
+	flags = ['-f', '-l']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^[a-zA-Z0-9_\-]+$']
+
+[[commands]]
+	name = "pidof"
+	description = "older sibling of pgrep"
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^[a-zA-Z0-9_\-]+$']
+
+[[commands]]
+	name = "id"
+	description = "prints your UID, primary GID, and all supplementary groups"
+	flags = ['-u', '-g', '-G', '-n']
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[a-zA-Z0-9_*.\-]+$']
+
+[[commands]]
+	name = "groups"
+	description = "lists your current groups"
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[a-zA-Z0-9_*.\-]+$']
+
+[[commands]]
+	name = "stat"
+	description = "returns file information"
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "getfacl"
+	description = "extended ACLs"
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+    name = "systemctl"
+    description = "query systemd service state (read-only subcommands only)"
+    flags = ['--no-pager', '--all']
+    [[commands.flags]]
+        name = '--type'
+        takesVal = true
+        glued = true
+        value = '^(service|target|timer|socket|mount|path)$'
+    [[commands.flags]]
+      	name = '--state'
+       	takesVal = true
+        glued = true
+        value = '^(failed|active|inactive|activating|deactivating)$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^(status|is-active|is-enabled|is-failed|show|cat|list-units|list-unit-files|list-dependencies)$']
+    [[commands.positional]]
+        required = false
+        acceptPattern = ['^[a-zA-Z0-9_@.\-]+$']
+
+[[commands]]
+    name = "journalctl"
+    description = "query the systemd journal"
+    flags = ['-b', '-r', '-k', '--no-pager']
+    [[commands.flags]]
+      	name = '-u'
+       	takesVal = true
+        value = '^[a-zA-Z0-9_@.\-]+$'
+    [[commands.flags]]
+        name = '-n'
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+        name = '-p'
+        takesVal = true
+        value = '^(emerg|alert|crit|err|warning|notice|info|debug)$'
+    [[commands.flags]]
+        name = '--since'
+        takesVal = true
+        glued = true
+        value = '^(-[1-9][0-9]*[smhd]|[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2})?)$'
+    [[commands.flags]]
+        name = '--until'
+        takesVal = true
+        glued = true
+        value = '^(-[1-9][0-9]*[smhd]|[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2})?)$'
+    [[commands.flags]]
+        name = '--output'
+        takesVal = true
+        glued = true
+        value = '^(short|cat|json|json-pretty|verbose)$'
+
+[[commands]]
+	name = "dmesg"
+	description = "kernel ring buffer"
+	flags = ['-T', '-d', '-t', '-k', '-u', '-x', '-e', '-r', '-P', '--nopager']
+	[[commands.flags]]
+		name = "-l"
+		takesVal = true
+		value = '^(emerg|alert|crit|err|warn|notice|info|debug)(,(emerg|alert|crit|err|warn|notice|info|debug))*$'
+	[[commands.flags]]
+		name = "--level"
+		takesVal = true
+		value = '^(emerg|alert|crit|err|warn|notice|info|debug)(,(emerg|alert|crit|err|warn|notice|info|debug))*$'
+	[[commands.flags]]
+		name = "-f"
+		takesVal = true
+		value = '^(kern|user|mail|daemon|auth|authpriv|syslog|lpr|news|uucp|cron|ftp|local0|local1|local2|local3|local4|local5|local6|local7)(,(kern|user|mail|daemon|auth|authpriv|syslog|lpr|news|uucp|cron|ftp|local[0-7]))*$'
+	[[commands.flags]]
+		name = "--facility"
+		takesVal = true
+		value = '^(kern|user|mail|daemon|auth|authpriv|syslog|lpr|news|uucp|cron|ftp|local0|local1|local2|local3|local4|local5|local6|local7)(,(kern|user|mail|daemon|auth|authpriv|syslog|lpr|news|uucp|cron|ftp|local[0-7]))*$'
+  	[[commands.flags]]
+   		name = "--time-format"
+     	takesVal = true
+      	value = '^(ctime|reltime|delta|notime|iso)$'
+
+[[commands]]
+    name = "zcat"
+    description = "decompress a gzip log to stdout (read-only)"
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+       
+[[commands]]
+    name = "xzcat"
+    description = "decompress an xz log to stdout (read-only)"
+    [[commands.positional]]
+    	required = true
+     	acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+       
+[[commands]]
+	name = "zstdcat"
+	description = "decompress a zstd log to stdout (read-only)"
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+       
+[[commands]]
+	name = "bzcat"
+	description = "decompress a bzip2 log to stdout (read-only)"
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+       
+[[commands]]
+	name = "zgrep"
+	description = "grep inside compressed logs (decompresses on the fly)"
+	flags = ['-i', '-n', '-v']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^[a-zA-Z0-9_ .\-]+$']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+       
+[[commands]]
+	name = "last"
+	description = "login history from wtmp"
+	flags = ['-a', '-i', '-F', '-x']
+	[[commands.flags]]
+		name = "-n"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[a-zA-Z0-9_\-]+$']
+       
+[[commands]]
+	name = "lastb"
+	description = "failed login attempts from btmp (usually root-only)"
+	flags = ['-a', '-i', '-F', '-x']
+	[[commands.flags]]
+		name = "-n"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[a-zA-Z0-9_\-]+$']
+       
+[[commands]]
+	name = "lastlog"
+	description = "most recent login per account"
+	[[commands.flags]]
+		name = "-u"
+		takesVal = true
+		value = '^[a-zA-Z0-9_\-]+$'
+	[[commands.flags]]
+		name = "-t"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.flags]]
+		name = "-b"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+       
+[[commands]]
+	name = "who"
+	description = "users logged in right now"
+	flags = ['-a', '-H']
+       
+[[commands]]
+	name = "w"
+	description = "logged-in users plus load and current command"
+	flags = ['-h', '-s']
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[a-zA-Z0-9_\-]+$']
+
+[[commands]]
+	name = "ss"
+	description = "socket statistics"
+	flags = ['-t', '-u', '-l', '-n', '-p', '-a', '-s', '-4', '-6', '-r']
+
+[[commands]]
+	name = "ip"
+	description = "The modern interface/route/neighbor tool (iproute2)"
+	flags = ['-br', '-s', '-4', '-6']
+	[[commands.positional]] # Object
+		required = true
+		acceptPattern = '^(addr|address|a|route|r|link|l|neigh|n)$'
+	[[commands.positional]] # verb
+		required = false
+		acceptPattern = '^(show|list|ls|get)$'
+	[[commands.positional]] # target
+		required = false
+		acceptPattern = '^[a-zA-Z0-9_.:\-]+$'
+	
+[[commands]]
+	name = "dig"
+	description = "detailed DNS lookup"
+	flags = ['+short', '+noall', '+answer', '+trace', '+tcp']
+	[[commands.positional]]
+		required = true
+		acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+	[[commands.positional]]
+        required = false
+        acceptPattern = ['^(A|AAAA|MX|TXT|NS|CNAME|SOA|PTR|SRV)$']
+
+[[commands]]
+    name = "host"
+    description = "one-shot DNS lookup"
+    flags = ['-a']
+    [[commands.flags]]
+    	name = "-t"
+        takesVal = true
+        value = '^(A|AAAA|MX|TXT|NS|CNAME|SOA|PTR|SRV)$'
+    [commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+    [[commands.positional]]
+    	required = false
+     	acceptPattern = ['^[a-zA-Z0-9.:\-]+$']
+
+[[commands]]
+    name = "getent"
+    description = "resolve via NSS (honors /etc/hosts + DNS, like the app does)"
+    [[commands.positional]]
+    	required = true
+     	acceptPattern = ['^(hosts|services|networks|protocols)$']
+    [[commands.positional]]
+        required = false
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+
+[[commands]]
+    name = "nslookup"
+    description = "legacy one-shot DNS lookup"
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+    [[commands.positional]]
+        required = false
+        acceptPattern = ['^[a-zA-Z0-9.:\-]+$']
+
+[[commands]]
+    name = "ping"
+    description = "ICMP reachability + latency"
+    flags = ['-n']
+    [[commands.flags]]
+    	name = "-c"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+        name = "-W"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+        name = "-w"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+
+[[commands]]
+    name = "traceroute"
+    description = "show router hops to a host"
+    flags = ['-n']
+    [[commands.flags]]
+    	name = "-m"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+    	name = "-w"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+        name = "-q"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+
+[[commands]]
+    name = "tracepath"
+    description = "show path to a host (no root needed)"
+    flags = ['-n']
+    [[commands.flags]]
+        name = "-m"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+
+  
+[[commands]]
+    name = "curl"
+    description = "HTTP(S) probe (HEAD/GET only)"
+    flags = ['-I', '-s', '-S', '-L', '-k', '-v']
+    [[commands.flags]]
+    	name = "--max-time"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.flags]]
+        name = "-w"
+        takesVal = true
+        value = '^%\{[a-z_]+\}$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^https?://[a-zA-Z0-9.:/_\-]+$']
+
+[[commands]]
+    name = "nc"
+    description = "TCP/UDP port-open check (zero-I/O mode)"
+    flags = ['-z', '-v', '-n', '-4', '-6']
+    [[commands.flags]]
+    	name = "-w"
+        takesVal = true
+        value = '^[1-9][0-9]*$'
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[a-zA-Z0-9.\-]+$']
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^[1-9][0-9]{0,4}$']
+
+[[commands]]
+    name = "iptables"
+    description = "list firewall rules (read-only; needs root)"
+    flags = ['-L', '-n', '-v']
+    [[commands.flags]]
+        name = "-t"
+        takesVal = true
+        value = '^(filter|nat|mangle|raw)$'
+
+[[commands]]
+    name = "nft"
+    description = "list nftables ruleset (read-only; needs root)"
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^list$']
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^(ruleset|tables|table|chains|chain)$']
+
+[[commands]]
+    name = "ufw"
+    description = "show firewall status (read-only; needs root)"
+    [[commands.positional]]
+        required = true
+        acceptPattern = ['^(status)$'] 
+
+[[commands]]
+	name = "df"
+	description = "Reports disk usage per mounted filesystem"
+	flags = ['-h', '-i', '-t', '-a', '-l']
+	[[commands.positional]]
+		required = false
+	 	acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "du"
+	description = "Sums the size of files under a directory"
+	flags = ['-h', '-s', '-x']
+	[[commands.flags]]
+		name = "--max-depth"
+		takesVal = true
+		value = '^[0-9]+$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+[[commands]]
+	name = "lsof"
+	description = "Lists open files"
+	flags = ['-n', '-P']
+	[[commands.flags]]
+		name = "-p"
+		takesVal = true
+		value = '^[1-9][0-9]*$'
+	[[commands.flags]]
+		name = "-i"
+		takesVal = true
+		value = '^[a-zA-Z0-9:.@\-]+$'
+	[[commands.flags]]
+		name = "+L"
+		takesVal = true
+		glued = true
+		value = '^[0-9]+$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+
+[[commands]]
+	name = "free"
+	description = "Memory and swap usage"
+	flags = ['-h', '-m', '-g', '-t', '-w']
+
+
+[[commands]]
+	name = "vmstat"
+	description = "Virtual memory, cpu and io statistics"
+	flags = ['-a', '-d', '-s', '-w']
+	[[commands.flags]]
+		name = "-S"
+		takesVal = true
+		value = '^(k|K|m|M)$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[1-9][0-9]*$']
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[1-9][0-9]*$']
+
+
+[[commands]]
+	name = "iostat"
+	description = "Disk IO statistics"
+	flags = ['-x', '-d', '-c', '-h', '-m', '-k', '-t', '-z']
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[1-9][0-9]*$']
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^[1-9][0-9]*$']
+
+
+[[commands]]
+	name = "lsblk"
+	description = "Lists block devices"
+	flags = ['-f', '-a', '-p', '-m', '-t']
+	[[commands.flags]]
+		name = "-o"
+		takesVal = true
+		value = '^[A-Z,]+$'
+
+
+[[commands]]
+	name = "findmnt"
+	description = "Lists mounted filesystems"
+	flags = ['-A', '-R', '-D', '-n']
+	[[commands.flags]]
+		name = "-t"
+		takesVal = true
+		value = '^[a-z0-9,.\-]+$'
+	[[commands.flags]]
+		name = "-T"
+		takesVal = true
+		value = '^/[a-zA-Z0-9_/.\-]+$'
+	[[commands.flags]]
+		name = "-S"
+		takesVal = true
+		value = '^[a-zA-Z0-9_/.:\-]+$'
+	[[commands.positional]]
+		required = false
+		acceptPattern = ['^/[a-zA-Z0-9_/.\-]+$']
+
+
+[[commands]]
+	name = "mount"
+	description = "Lists mounted filesystems"
+	flags = ['-l']
+
+
+[[commands]]
+	name = "swapon"
+	description = "Shows swap usage"
+	flags = ['--show', '-s']

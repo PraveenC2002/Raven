@@ -9,7 +9,11 @@ type Transport interface{
 type Orchestrator interface{}
 type Agent interface{}
 type LLM interface {}
-type Bouncer interface{}
+
+type Bouncer interface{
+	validate(string) error
+	describe() (string, error)
+}
 
 type Diagnoser interface{
 	newConn(*connectionInfo) error

@@ -9,3 +9,8 @@ const (
 	getMethodLimit = 1
 	pollRetryBackoff = 5 * time.Second
 )
+
+// Diagnoser
+const (
+	sshClientTimeout = 5 * time.Second
+)
