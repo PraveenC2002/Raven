@@ -32,8 +32,8 @@ func (r *registry) initUser(o *owner) error {
 		(?, ?)
 	`
 
-	o.id = 1
-	_, err := r.db.Exec(query, o.id, o.ownerId)
+	o.Id = 1
+	_, err := r.db.Exec(query, o.Id, o.OwnerId)
 	if err != nil {
 		return err
 	}
@@ -41,10 +41,35 @@ func (r *registry) initUser(o *owner) error {
 	return nil
 }
 
+func (r *registry) getUser() (*tgInt, error) {
+
+	const query = `
+		SELECT 
+		owner_id
+		FROM owner
+	`
+
+	row := r.db.QueryRow(query)
+
+	var ownerId tgInt
+
+	err := row.Scan(&ownerId); 
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("no user found")
+	}
+	
+	if err != nil {
+		return nil, err
+	}
+
+	return &ownerId, nil 
+}
+
+
 func (r *registry) addVm(m *machine) error {
 
-	m.id = uuid.New()
-	m.createdAt = time.Now()
+	m.Id = uuid.New()
+	m.CreatedAt = time.Now()
 
 	const query = `
 		INSERT INTO machines
@@ -52,9 +77,9 @@ func (r *registry) addVm(m *machine) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err := r.db.Exec(query, m.id, m.name, m.description, m.createdAt, m.host, m.port, m.sshUser, m.keyPath, m.hostKey)
+	_, err := r.db.Exec(query, m.Id, m.Name, m.Description, m.CreatedAt, m.Host, m.Port, m.SshUser, m.KeyPath, m.HostKey)
 	if err != nil {
-		return fmt.Errorf("insert machine %q: %w", m.name, err)
+		return fmt.Errorf("insert machine %q: %w", m.Name, err)
 	}
 
 	return nil
@@ -88,7 +113,7 @@ func (r *registry) getVm(name string) (*machine, error) {
 	row := r.db.QueryRow(query, name)
 
 	m := &machine{}
-	err := row.Scan(&m.id, &m.name, &m.description, &m.createdAt, &m.host, &m.port, &m.sshUser, &m.keyPath, &m.hostKey)
+	err := row.Scan(&m.Id, &m.Name, &m.Description, &m.CreatedAt, &m.Host, &m.Port, &m.SshUser, &m.KeyPath, &m.HostKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("no machine with name %s found", name)
 	}
@@ -116,7 +141,7 @@ func (r *registry) listVm() ([]*machine, error) {
 	var machines []*machine
 	for rows.Next() {
 		m := &machine{}
-		err := rows.Scan(&m.id, &m.name, &m.description, &m.createdAt, &m.host, &m.port, &m.sshUser, &m.keyPath, &m.hostKey)
+		err := rows.Scan(&m.Id, &m.Name, &m.Description, &m.CreatedAt, &m.Host, &m.Port, &m.SshUser, &m.KeyPath, &m.HostKey)
 		if err != nil {
 			return nil, err
 		}
@@ -139,9 +164,9 @@ func (r *registry) updateVm(m *machine) error {
 		WHERE id = ?
 	`
 
-	_, err := r.db.Exec(query, m.name, m.description, m.host, m.port, m.sshUser, m.keyPath, m.hostKey, m.id)
+	_, err := r.db.Exec(query, m.Name, m.Description, m.Host, m.Port, m.SshUser, m.KeyPath, m.HostKey, m.Id)
 	if err != nil {
-		return fmt.Errorf("update machine %q: %w", m.name, err)
+		return fmt.Errorf("update machine %q: %w", m.Name, err)
 	}
 
 	return nil
@@ -179,7 +204,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	nameInp := huh.NewInput().
 		Title("Name").
 		Description("must be unique").
-		Value(&m.name).
+		Value(&m.Name).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("name is required")
@@ -190,7 +215,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	descriptionInp := huh.NewText().
 		Title("Description").
 		Placeholder("describe your machine").
-		Value(&m.description).
+		Value(&m.Description).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("description is required")
@@ -201,7 +226,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	hostInp := huh.NewInput().
 		Title("Host").
 		Description("hostname or IP address of the machine").
-		Value(&m.host).
+		Value(&m.Host).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("host is required")
@@ -210,8 +235,8 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 		})
 
 	port := "22"
-	if m.port != 0 {
-		port = strconv.Itoa(m.port)
+	if m.Port != 0 {
+		port = strconv.Itoa(m.Port)
 	}
 	portInp := huh.NewInput().
 		Title("Port").
@@ -231,7 +256,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	sshUserInp := huh.NewInput().
 		Title("SSH User").
 		Description("SSH login user").
-		Value(&m.sshUser).
+		Value(&m.SshUser).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("SSH User is required")
@@ -242,7 +267,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	keyPathInp := huh.NewInput().
 		Title("Key Path").
 		Description("path to private SSH key").
-		Value(&m.keyPath).
+		Value(&m.KeyPath).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("key path is required")
@@ -253,7 +278,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	hostKeyInp := huh.NewInput().
 		Title("Host Key").
 		Description("public host key to verify machine identity").
-		Value(&m.hostKey).
+		Value(&m.HostKey).
 		Validate(func(s string) error {
 			if s == "" {
 				return errors.New("host key is required")
@@ -297,11 +322,12 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 	}
 
 	p, _ := strconv.Atoi(port)
-	m.port = p
+	m.Port = p
 
 	return true, nil
 }
 
+// TODO: Enforce hard 64 chars limit on machine name
 func newAddVmCmd(r *registry) *cobra.Command {
 
 	add := func(cmd *cobra.Command, args []string) error {
@@ -315,6 +341,8 @@ func newAddVmCmd(r *registry) *cobra.Command {
 		if !ok {
 			return nil
 		}
+
+		
 
 		return r.addVm(m)
 	}
@@ -406,7 +434,7 @@ func listMachines(machines []*machine) {
 		Headers("NAME", "HOST", "PORT", "SSH-USER")
 
 	for _, m := range machines {
-		t.Row(m.name, m.host, strconv.Itoa(m.port), m.sshUser)
+		t.Row(m.Name, m.Host, strconv.Itoa(m.Port), m.SshUser)
 	}
 
 	lipgloss.Println(t)
@@ -460,20 +488,20 @@ func showMachine(m *machine) {
 
 	kv := lipgloss.JoinVertical(
 		lipgloss.Left,
-		row("ID :", m.id.String()),
-		row("Name :", m.name),
-		row("Host :", m.host),
-		row("Port :", strconv.Itoa(m.port)),
-		row("SSH User :", m.sshUser),
-		row("Key Path :", m.keyPath),
-		row("Host Key :", m.hostKey),
-		row("Created :", m.createdAt.Format(time.RFC3339)),
+		row("ID :", m.Id.String()),
+		row("Name :", m.Name),
+		row("Host :", m.Host),
+		row("Port :", strconv.Itoa(m.Port)),
+		row("SSH User :", m.SshUser),
+		row("Key Path :", m.KeyPath),
+		row("Host Key :", m.HostKey),
+		row("Created :", m.CreatedAt.Format(time.RFC3339)),
 	)
 
 	descBlock := lipgloss.JoinVertical(
 		lipgloss.Left,
 		labelStyle.Render("Description :"),
-		descStyle.Render(m.description),
+		descStyle.Render(m.Description),
 	)
 
 	content := lipgloss.JoinVertical(lipgloss.Left, kv, "", descBlock)
@@ -513,7 +541,7 @@ func newInitCmd(r *registry) *cobra.Command {
 
 	runInit := func(cmd *cobra.Command, args []string) error {
 		o := &owner{
-			ownerId: tgId(ownerId),
+			OwnerId: tgInt(ownerId),
 		}
 
 		return r.initUser(o)

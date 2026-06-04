@@ -7,14 +7,15 @@ import (
 	"github.com/google/uuid"
 )
 
-type tgId int64
+type tgInt int64
 
 type request struct {
-	messageId tgId
-	updateId  tgId
-	chatId    tgId
-	userId    tgId
-	query     string
+	messageId   tgInt
+	updateId    tgInt
+	chatId      tgInt
+	userId      tgInt
+	machineName string
+	query       string
 }
 
 type tgCommonResponse struct {
@@ -24,24 +25,40 @@ type tgCommonResponse struct {
 }
 
 type tgUser struct {
-	Id tgId `json:"id"`
+	Id tgInt `json:"id"`
 }
 
 type tgChat struct {
-	Id tgId `json:"id"`
+	Id tgInt `json:"id"`
+}
+
+type tgMessageEntity struct {
+	Type   string `json:"type"`
+	Offset tgInt  `json:"offset"`
+	Length tgInt  `json:"length"`
 }
 
 type tgMessage struct {
-	MessageId tgId    `json:"message_id"`
-	From      *tgUser `json:"from"`
-	Chat      *tgChat `json:"chat"`
-	Date      int64   `json:"date"`
-	Message   string  `json:"text"`
+	MessageId       tgInt              `json:"message_id"`
+	MessageThreadId tgInt              `json:"message_thread_id,omitempty"`
+	From            *tgUser            `json:"from,omitempty"`
+	Chat            *tgChat            `json:"chat"`
+	Date            tgInt              `json:"date"`
+	Text            string             `json:"text"`
+	Entities        []*tgMessageEntity `json:"entities,omitempty"`
+}
+
+type tgCallBackQuery struct {
+	Id      string     `json:"id"`
+	From    *tgUser    `json:"from"`
+	Message *tgMessage `json:"message,omitempty"`
+	Data    string     `json:"data"`
 }
 
 type tgUpdate struct {
-	UpdateId tgId       `json:"update_id"`
-	Message  *tgMessage `json:"message"`
+	UpdateId      tgInt            `json:"update_id"`
+	Message       *tgMessage       `json:"message,omitempty"`
+	CallBackQuery *tgCallBackQuery `json:"callback_query,omitempty"`
 }
 
 type tgGetUpdateResponse struct {
@@ -54,30 +71,54 @@ type tgSendMessageResponse struct {
 	Result *tgMessage `json:"result"`
 }
 
+type tgInlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+type tgInlineKeyboardMarkup struct {
+	InlineKeyboard [][]*tgInlineKeyboardButton `json:"inline_keyboard"`
+}
+
+type tgSendMessage[T any] struct {
+	ChatId      tgInt  `json:"chat_id"`
+	ThreadId    tgInt  `json:"message_thread_id,omitempty"`
+	Text        string `json:"text"`
+	ParseMode   string `json:"parse_mode,omitempty"`
+	ReplyMarkup T      `json:"reply_markup,omitempty"`
+}
+
+type tgEditMessageText[T any] struct {
+	ChatId      tgInt  `json:"chat_id,omitempty"`
+	MessageId   tgInt  `json:"message_id,omitempty"`
+	Text        string `json:"text"`
+	ReplyMarkup T      `json:"reply_markup,omitempty"`
+}
+
 type machine struct {
 	connectionInfo
-	id          uuid.UUID `db:"id"`
-	name        string    `db:"name"`
-	description string    `db:"description"`
-	createdAt   time.Time `db:"created_at"`
+	Id          uuid.UUID `db:"id"`
+	Name        string    `db:"name"`
+	Description string    `db:"description"`
+	CreatedAt   time.Time `db:"created_at"`
 }
 
 type connectionInfo struct {
-	host    string `db:"host"`
-	port    int    `db:"port"`
-	sshUser string `db:"ssh_user"`
-	keyPath string `db:"key_path"`
-	hostKey string `db:"host_key"`
+	Host    string `db:"host"`
+	Port    int    `db:"port"`
+	SshUser string `db:"ssh_user"`
+	KeyPath string `db:"key_path"`
+	HostKey string `db:"host_key"`
 }
 
 type sshOutput struct {
-	output   string `db:"output"`
-	exitCode int    `db:"exit_code"`
+	Output   string `db:"output"`
+	ExitCode int    `db:"exit_code"`
 }
 
 type owner struct {
-	id      int  `db:"id"`
-	ownerId tgId `db:"owner_id"`
+	Id      int   `db:"id"`
+	OwnerId tgInt `db:"owner_id"`
 }
 
 type shellFlag struct {
@@ -106,13 +147,13 @@ type shellCommand struct {
 }
 
 type shellDenyList struct {
-	exact         []string `toml:"exact"`
-	patterns      []string `toml:"patterns"`
+	Exact         []string `toml:"exact"`
+	Patterns      []string `toml:"patterns"`
 	patternsRegex []*regexp.Regexp
 }
 
 type shellPolicy struct {
 	Commands    []*shellCommand `toml:"commands"`
 	CommandsMap map[string]*shellCommand
-	denyList    *shellDenyList `toml:"denyList"`
+	DenyList    *shellDenyList `toml:"DenyList"`
 }

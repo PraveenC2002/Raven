@@ -15,7 +15,7 @@ type remoteSSH struct {
 
 func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 
-	pvKey, err := os.ReadFile(connInfo.keyPath)
+	pvKey, err := os.ReadFile(connInfo.KeyPath)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 
 	authMethod := ssh.PublicKeys(signer)
 
-	hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(connInfo.hostKey))
+	hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(connInfo.HostKey))
 	if err != nil {
 		return nil, err
 	}
@@ -35,13 +35,13 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 	hostKeyCallBack := ssh.FixedHostKey(hostKey)
 
 	clientConf := ssh.ClientConfig{
-		User: connInfo.sshUser,
+		User: connInfo.SshUser,
 		Auth: []ssh.AuthMethod{authMethod},
 		HostKeyCallback: hostKeyCallBack,
 		Timeout: sshClientTimeout,
 	}
 
-	addr := net.JoinHostPort(connInfo.host, strconv.Itoa(connInfo.port))
+	addr := net.JoinHostPort(connInfo.Host, strconv.Itoa(connInfo.Port))
 	
 	client, err := ssh.Dial("tcp", addr, &clientConf)
 	if err != nil {
@@ -69,8 +69,8 @@ func (r *remoteSSH) execute(cmd string) (*sshOutput, error) {
 	var exitErr *ssh.ExitError
 	if errors.As(err, &exitErr) {
 		return &sshOutput{
-			output: resText,
-			exitCode: exitErr.ExitStatus(),
+			Output: resText,
+			ExitCode: exitErr.ExitStatus(),
 		}, nil
 	}
 
@@ -79,8 +79,8 @@ func (r *remoteSSH) execute(cmd string) (*sshOutput, error) {
 	}
 
 	return &sshOutput{
-		output: resText,
-		exitCode: 0,
+		Output: resText,
+		ExitCode: 0,
 	}, nil
 
 }

@@ -27,12 +27,12 @@ func newBouncer() (*bouncer, error) {
 		return nil, fmt.Errorf("policy parsing error : %v", err)
 	}
 
-	for _, pattern := range policy.denyList.exact {
+	for _, pattern := range policy.DenyList.Exact {
 		reg, err := regexp.Compile(pattern)
 		if err != nil {
 			return nil, err
 		}
-		policy.denyList.patternsRegex = append(policy.denyList.patternsRegex, reg)
+		policy.DenyList.patternsRegex = append(policy.DenyList.patternsRegex, reg)
 	}
 
 	policy.CommandsMap = make(map[string]*shellCommand)
@@ -89,11 +89,11 @@ func (b *bouncer) checkDenyList(val string) error {
 
 	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errPrefix, val)
 
-	if slices.Contains(b.policy.denyList.exact, val) {
+	if slices.Contains(b.policy.DenyList.Exact, val) {
 		return violationErr
 	}
 
-	for _, pattern := range b.policy.denyList.patternsRegex {
+	for _, pattern := range b.policy.DenyList.patternsRegex {
 		if pattern.MatchString(val) {
 			return violationErr
 		}
@@ -269,14 +269,14 @@ func (b *bouncer) describe() string {
 
 	sb.WriteString("\n---\n\nList of globally prohibited exact values:\n")
 	sb.WriteString("Flag values and positional arguments should not be equal to any of the elements of this list.\nHere is the list:\n\n")
-	for _, exact := range b.policy.denyList.exact {
+	for _, exact := range b.policy.DenyList.Exact {
 		sb.WriteString(exact)
 		sb.WriteByte('\n')
 	}
 
 	sb.WriteString("\n---\n\nList of globally prohibited regular expression patterns for values:\n")
 	sb.WriteString("Flag values and positional arguments should not satisfy any of these regular expressions in the list.\nHere is the list:\n\n")
-	for _, patt := range b.policy.denyList.patterns {
+	for _, patt := range b.policy.DenyList.Patterns {
 		sb.WriteString(patt)
 		sb.WriteByte('\n')
 	}
@@ -337,3 +337,4 @@ func (b *bouncer) describe() string {
 	sb.WriteString("\n---\n")
 	return sb.String()
 }
+
