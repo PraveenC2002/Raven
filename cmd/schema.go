@@ -96,11 +96,11 @@ type tgEditMessageText[T any] struct {
 }
 
 type machine struct {
-	connectionInfo
 	Id          uuid.UUID `db:"id"`
 	Name        string    `db:"name"`
 	Description string    `db:"description"`
 	CreatedAt   time.Time `db:"created_at"`
+	connectionInfo
 }
 
 type connectionInfo struct {
@@ -122,15 +122,16 @@ type owner struct {
 }
 
 type shellFlag struct {
-	Name       string `toml:"name"`
-	TakesVal   bool   `toml:"takesVal"`
-	Glued      bool   `toml:"glued"`
-	Value      string `toml:"value"`
-	ValueRegex *regexp.Regexp
+	Name         string `toml:"name"`
+	TakesVal     bool   `toml:"takesVal"`
+	Glued        bool   `toml:"glued"`
+	ValuePattern string `toml:"value"`
+	ValueRegex   *regexp.Regexp
 }
 
 type shellPositional struct {
 	Required           bool     `toml:"required"`
+	Index              int      `toml:"index"`
 	AcceptPattern      []string `toml:"acceptPattern"`
 	AcceptPatternRegex []*regexp.Regexp
 	RejectPattern      []string `toml:"rejectPattern"`
@@ -144,6 +145,7 @@ type shellCommand struct {
 	Flags       []*shellFlag `toml:"flags"`
 	FlagsMap    map[string]*shellFlag
 	Positionals []*shellPositional `toml:"positionals"`
+	Template    string             `toml:"template"`
 }
 
 type shellDenyList struct {
@@ -156,4 +158,33 @@ type shellPolicy struct {
 	Commands    []*shellCommand `toml:"commands"`
 	CommandsMap map[string]*shellCommand
 	DenyList    *shellDenyList `toml:"DenyList"`
+}
+
+type remoteSSHFunctionCall struct {
+
+	Command string `json:"command"`
+
+	Flags   []*struct {
+		Name  string `json:"name"`
+		Value string `json:"value,omitempty"`
+	} `json:"flags,omitempty"`
+
+	Positionals []*struct {
+		Index int    `json:"index"`
+		Value string `json:"value"`
+	} `json:"positionals,omitempty"`
+
+	Reason string `json:"reason"`
+}
+
+type finalReport struct {
+	Summary   string `json:"summary"`
+	RootCause string `json:"root_cause"`
+	Evidence  []*struct {
+		Command     string `json:"command"`
+		Observation string `json:"observation"`
+	} `json:"evidence"`
+	Recommendation   string                `json:"recommendation"`
+	Confidence       finalReportConfidence `json:"confidence"`
+	ConfidenceReason string                `json:"confidence_reason"`
 }

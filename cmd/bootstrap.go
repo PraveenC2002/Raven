@@ -13,6 +13,7 @@ type config struct {
 	tgToken    string
 	dbPath     string
 	schemaPath string
+	geminiAPIKey string
 }
 
 func loadConf() (*config, error) {
@@ -40,6 +41,11 @@ func loadConf() (*config, error) {
 	conf.tgToken = os.Getenv("TG_BOT_TOKEN")
 	if len(conf.tgToken) == 0 {
 		return nil, fmt.Errorf("invalid telegram token")
+	}
+
+	conf.geminiAPIKey = os.Getenv("GEMINI_API_KEY")
+	if len(conf.geminiAPIKey) == 0 {
+		return nil, fmt.Errorf("no gemini api key provided")
 	}
 
 	conf.dbPath = filepath.Join(ravenPath, "raven.db")

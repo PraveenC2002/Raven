@@ -2,7 +2,7 @@ package main
 
 import "time"
 
-const noOp = "noop"
+const noOp = "no op"
 
 // Transport
 
@@ -35,7 +35,6 @@ const (
 )
 
 // Session
-
 type sessionStatus string
 
 const (

@@ -1,38 +1,49 @@
 package main
 
-import "sync"
+import (
+	"context"
 
-type Transport interface{
-	send(any, string) (*tgSendMessageResponse, error)
+	"google.golang.org/genai"
+)
+
+type Transport interface {
 	poll()
 	newThread(tgInt, string) (*tgInt, error)
-	messages() <- chan *tgMessage
-	callBacks() <- chan *tgCallBackQuery
+	messages() <-chan *tgMessage
+	callBacks() <-chan *tgCallBackQuery
+	send(any, string) (*tgSendMessageResponse, error)
 	errors() <-chan *pollErr
 }
 
-type Session interface {}
+type Session interface{}
 
-type Orchestrator interface{
-	handleRequest()
-	getLock() *sync.Mutex	
+type Orchestrator interface {
+	run()
 }
 
 type Agent interface{}
-type LLM interface {}
 
-type Bouncer interface{
-	validate(string) error
-	describe() string
+type LLM interface {
+	generate(context.Context, string) (*genai.GenerateContentResponse, error)
+	getFunctionCalls(*genai.GenerateContentResponse) []*genai.FunctionCall
+	getFinalReport(payload *genai.GenerateContentResponse) (*finalReport, error)
 }
 
-type RemoteSSH interface{
-	newConn(*connectionInfo) error
+type Bouncer interface {
+	validate(string) error
+	describe() (string, error)
+}
+
+type LLMTool interface {
+	toolCall(*genai.FunctionCall) (any, error)
+}
+
+type RemoteSSH interface {
 	execute(string) (*sshOutput, error)
 	closeConn() error
 }
 
-type Registry interface{
+type Registry interface {
 	initUser(*owner) error
 	getUser() (*tgInt, error)
 	addVm(*machine) error

@@ -1,17 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"text/template"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 type bouncer struct {
-	policy    *shellPolicy
+	Policy    *shellPolicy
 	errPrefix string
 }
 
@@ -27,7 +30,7 @@ func newBouncer() (*bouncer, error) {
 		return nil, fmt.Errorf("policy parsing error : %v", err)
 	}
 
-	for _, pattern := range policy.DenyList.Exact {
+	for _, pattern := range policy.DenyList.Patterns {
 		reg, err := regexp.Compile(pattern)
 		if err != nil {
 			return nil, err
@@ -48,7 +51,7 @@ func newBouncer() (*bouncer, error) {
 				cmd.FlagsMap[cmd.Flags[i].Name] = cmd.Flags[i]
 				continue
 			}
-			valueRegex, err := regexp.Compile(cmd.Flags[i].Value)
+			valueRegex, err := regexp.Compile(cmd.Flags[i].ValuePattern)
 			if err != nil {
 				return nil, fmt.Errorf("command %s flag %s value regex parsing error : %v", cmd.Name, cmd.Flags[i].Name, err)
 			}
@@ -80,160 +83,9 @@ func newBouncer() (*bouncer, error) {
 	}
 
 	return &bouncer{
-		policy:    &policy,
+		Policy:    &policy,
 		errPrefix: "validate command error :",
 	}, nil
-}
-
-func (b *bouncer) checkDenyList(val string) error {
-
-	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errPrefix, val)
-
-	if slices.Contains(b.policy.DenyList.Exact, val) {
-		return violationErr
-	}
-
-	for _, pattern := range b.policy.DenyList.patternsRegex {
-		if pattern.MatchString(val) {
-			return violationErr
-		}
-	}
-
-	return nil
-}
-
-func (b *bouncer) inRange(i, n int) bool {
-	return i < n
-}
-
-func (b *bouncer) isFlag(token string) bool {
-	return token[0] == '-'
-}
-
-func (b *bouncer) isFlagGlued(token string) int {
-	return strings.Index(token, "=")
-}
-
-func (b *bouncer) validate(cmd string) error {
-
-	if len(cmd) == 0 {
-		return fmt.Errorf("%s empty command string", b.errPrefix)
-	}
-
-	tokens := strings.Fields(cmd)
-
-	command, ok := b.policy.CommandsMap[tokens[0]]
-	if !ok {
-		return fmt.Errorf("%s command not allowed", b.errPrefix)
-	}
-
-	n := len(tokens)
-
-	i := 1
-
-	// cmd has flags
-	if len(command.Flags) != 0 {
-
-		for b.inRange(i, n) && b.isFlag(tokens[i]) {
-
-			token := tokens[i]
-			var flToken string
-			isGlued := b.isFlagGlued(tokens[i])
-
-			if isGlued != -1 {
-				flToken = token[:isGlued+1]
-			} else {
-				flToken = token
-			}
-
-			flag, ok := command.FlagsMap[flToken]
-			if !ok {
-				return fmt.Errorf("%s flag %s not allowed on command %s", b.errPrefix, flToken, command.Name)
-			}
-
-			if !flag.TakesVal && isGlued != -1 {
-				return fmt.Errorf("%s flag value not allowed on %s flag in %s command ", b.errPrefix, flToken, command.Name)
-			}
-
-			if flag.TakesVal {
-
-				if (isGlued != -1 && len(token)-1 == isGlued) || (isGlued == -1 && !b.inRange(i+1, n)) {
-					return fmt.Errorf("%s flag value not provided on %s flag in %s command ", b.errPrefix, flToken, command.Name)
-				}
-
-				var flValue string
-
-				if isGlued != -1 {
-					flValue = token[isGlued+1:]
-				} else {
-					flValue = tokens[i+1]
-				}
-
-				if err := b.checkDenyList(flValue); err != nil {
-					return fmt.Errorf("%s \n command : %s", err.Error(), command.Name)
-				}
-
-				ok := flag.ValueRegex.MatchString(flValue)
-				if !ok {
-					err := fmt.Sprintf("%s value %s not allowed on flag %s in command %s", b.errPrefix, tokens[i], tokens[i-1], command.Name)
-					return fmt.Errorf("%s", err)
-				}
-
-				if isGlued == -1 {
-					i += 2
-				} else {
-					i++
-				}
-			} else {
-				i++
-			}
-		}
-	}
-
-	// cmd has positionals
-	for posIdx, pos := range command.Positionals {
-
-		if !pos.Required && !b.inRange(i, n) {
-			break
-		}
-
-		if pos.Required && !b.inRange(i, n) {
-			return fmt.Errorf("%s %dth required positional argument on %s command not found", b.errPrefix, posIdx+1, command.Name)
-		}
-
-		arg := tokens[i]
-
-		violationErr := fmt.Sprintf("%s %dth positional argument %s violates command policy on command %s", b.errPrefix, posIdx+1, arg, command.Name)
-
-		for _, str := range pos.RejectList {
-			if arg == str {
-				return fmt.Errorf("%s", violationErr)
-			}
-		}
-
-		for _, reg := range pos.RejectPatternRegex {
-			if reg.MatchString(arg) {
-				return fmt.Errorf("%s", violationErr)
-			}
-		}
-
-		matched := false
-		for _, reg := range pos.AcceptPatternRegex {
-			matched = matched || reg.MatchString(arg)
-		}
-
-		if !matched {
-			return fmt.Errorf("%s", violationErr)
-		}
-
-		i++
-	}
-
-	if i != len(tokens) {
-		return fmt.Errorf("%s invalid command, leftover %s", b.errPrefix, strings.Join(tokens[i:], ""))
-	}
-
-	return nil
 }
 
 func (b *bouncer) ordinal(n int) string {
@@ -254,87 +106,272 @@ func (b *bouncer) ordinal(n int) string {
 	}
 }
 
-func (b *bouncer) describe() string {
-	var sb strings.Builder
-	sb.WriteString("This is shell command security policy.\n" +
-		"Commands given must strictly adhere to this policy.\n" +
-		"Also avoid long hanging commands.\n" +
-		"Every command must match the following command structure :\n" +
-		"command [flags...] [positional arguments...]\n" +
-		"All flags must strictly come before positional arguments.\n" +
-		"All positional arguments must strictly come after flags.\n" +
-		"Variadic positional arguments are strictly not allowed.\n"+ 
-		"If required split the shell prompts into multiple prompts to satisfy the policy\n",
-	)
+func (b *bouncer) checkDenyList(val string) error {
 
-	sb.WriteString("\n---\n\nList of globally prohibited exact values:\n")
-	sb.WriteString("Flag values and positional arguments should not be equal to any of the elements of this list.\nHere is the list:\n\n")
-	for _, exact := range b.policy.DenyList.Exact {
-		sb.WriteString(exact)
-		sb.WriteByte('\n')
+	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errPrefix, val)
+
+	if slices.Contains(b.Policy.DenyList.Exact, val) {
+		return violationErr
 	}
 
-	sb.WriteString("\n---\n\nList of globally prohibited regular expression patterns for values:\n")
-	sb.WriteString("Flag values and positional arguments should not satisfy any of these regular expressions in the list.\nHere is the list:\n\n")
-	for _, patt := range b.policy.DenyList.Patterns {
-		sb.WriteString(patt)
-		sb.WriteByte('\n')
-	}
-
-	sb.WriteString("\n---\n\nCommand policy which must be adhered to:\n")
-	for _, cmd := range b.policy.Commands {
-		sb.WriteString("\n---\n\n")
-		sb.WriteString("Command name: ")
-		sb.WriteString(cmd.Name)
-		sb.WriteByte('\n')
-		sb.WriteString("Command description: ")
-		sb.WriteString(cmd.Description)
-		sb.WriteByte('\n')
-		for _, f := range cmd.Flags {
-			sb.WriteString("Command accepts flag: ")
-			sb.WriteString(f.Name)
-			sb.WriteByte('\n')
-			if f.TakesVal {
-				sb.WriteString("Flag ")
-				sb.WriteString(f.Name)
-				sb.WriteString(" takes value satisfying regex: ")
-				sb.WriteString(f.Value)
-				sb.WriteByte('\n')
-			}
-		}
-		for i, pos := range cmd.Positionals {
-			sb.WriteString("Command accepts ")
-			sb.WriteString(b.ordinal(i + 1))
-			sb.WriteString(" positional arg\n")
-			if pos.Required {
-				sb.WriteString("This positional arg is required\n")
-			} else {
-				sb.WriteString("This positional is optional\n")
-			}
-			if len(pos.RejectList) != 0 {
-				sb.WriteString("For this positional the following values are prohibited literally:\n")
-				for _, rej := range pos.RejectList {
-					sb.WriteString(rej)
-					sb.WriteByte('\n')
-				}
-			}
-			if len(pos.RejectPattern) != 0 {
-				sb.WriteString("For this positional, values satisfying the following regular expressions are prohibited:\n")
-				for _, rej := range pos.RejectPattern {
-					sb.WriteString(rej)
-					sb.WriteByte('\n')
-				}
-			}
-			if len(pos.AcceptPattern) != 0 {
-				sb.WriteString("For this positional, values satisfying the following regular expressions are accepted; reject patterns take precedence over accept patterns:\n")
-				for _, acpt := range pos.AcceptPattern {
-					sb.WriteString(acpt)
-					sb.WriteByte('\n')
-				}
-			}
+	for _, pattern := range b.Policy.DenyList.patternsRegex {
+		if pattern.MatchString(val) {
+			return violationErr
 		}
 	}
-	sb.WriteString("\n---\n")
-	return sb.String()
+
+	return nil
 }
 
+func (b *bouncer) validate(fc *remoteSSHFunctionCall) error {
+
+	cmd, ok := b.Policy.CommandsMap[fc.Command]
+	if !ok {
+		return fmt.Errorf("%s command not allowed", b.errPrefix)
+	}
+
+	// check flags
+	for _, fcFlag := range fc.Flags {
+
+		flag, ok := cmd.FlagsMap[fcFlag.Name]
+
+		if !ok {
+			return fmt.Errorf("%s flag %s not allowed on command %s", b.errPrefix, fcFlag.Name, fc.Command)
+		}
+
+		if len(fcFlag.Value) == 0 && flag.TakesVal {
+			return fmt.Errorf("%s flag %s value not provided on command %s", b.errPrefix, fcFlag.Name, fc.Command)
+		}
+
+		if flag.TakesVal {
+			err := b.checkDenyList(fcFlag.Value)
+			if err != nil {
+				return err
+			}
+			if !flag.ValueRegex.MatchString(fcFlag.Value) {
+				return fmt.Errorf("%s %s value not allowed on %s flag on command %s", b.errPrefix, fcFlag.Value, fcFlag.Name, fc.Command)
+			}
+		}
+	}
+
+	// check positionals
+	for i, fcPos := range fc.Positionals {
+
+		err := b.checkDenyList(fcPos.Value)
+		if err != nil {
+			return err
+		}
+
+		if fcPos.Index < 1 || fcPos.Index > len(cmd.Positionals) {
+			err = fmt.Errorf("%s positional with index %d not defined in command %s according to shell security policy", b.errPrefix, fcPos.Index, fc.Command)
+			return err
+		}
+
+		// check for duplicate positionals
+		for j := i - 1; j >= 0; j-- {
+			if fc.Positionals[j].Index == fc.Positionals[i].Index {
+				err = fmt.Errorf("%s positional with index %d passed more than once on command %s", b.errPrefix, fc.Positionals[j].Index, fc.Command)
+				return err
+			}
+		}
+
+		posIdx := fcPos.Index - 1
+
+		if slices.Contains(cmd.Positionals[posIdx].RejectList, fcPos.Value) {
+			return fmt.Errorf("%s %s positional value at %s positional not allowed for command %s", b.errPrefix, fcPos.Value, b.ordinal(posIdx+1), fc.Command)
+		}
+
+		for j, pattern := range cmd.Positionals[posIdx].RejectPatternRegex {
+			patternStr := cmd.Positionals[posIdx].RejectPattern[j]
+			if pattern.MatchString(fcPos.Value) {
+				return fmt.Errorf("%s positional value satisfying regex pattern %s at %s positional not allowed for command %s", b.errPrefix, patternStr, b.ordinal(posIdx+1), fc.Command)
+			}
+		}
+
+		if len(cmd.Positionals[posIdx].AcceptPattern) == 0 {
+			continue
+		}
+
+		violationErr := fmt.Sprintf("%s positional value %s on positional argument with index %d violates command policy of command %s", b.errPrefix, fcPos.Value, fcPos.Index, fc.Command)
+		matched := false
+		for _, reg := range cmd.Positionals[posIdx].AcceptPatternRegex {
+			matched = matched || reg.MatchString(fcPos.Value)
+		}
+
+		if !matched {
+			return fmt.Errorf("%s", violationErr)
+		}
+	}
+
+	// check for missing positional args
+	for _, pos := range cmd.Positionals {
+		if pos.Required {
+			found := false
+			for _, fcPos := range fc.Positionals {
+				if pos.Index == fcPos.Index {
+					found = true
+				}
+			}
+			if !found {
+				err := fmt.Errorf("%s positional with index %d is required on command %s but not provided", b.errPrefix, pos.Index, fc.Command)
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (b *bouncer) describe() (string, error) {
+
+	shellPolicyTempl := `
+	This is shell command security policy.
+	Shell commands you wish to run using execute_ssh tool must strictly adhere to this shell security policy.
+
+	- Avoid long hanging commands.
+	- Variadic positional arguments are strictly not allowed.
+	- If required split the shell prompts into multiple prompts to satisfy the policy
+
+	**List of globally prohibited exact values:**
+	Flag values and positional arguments should not be equal to any of the elements of this list.
+
+	Here is the list:
+
+	{{range .Policy.DenyList.Exact}}
+	- {{.}}
+	{{end}}
+
+	**List of globally prohibited regular expression patterns for values:**
+	Flag values and positional arguments should not satisfy any of these regular expressions in the list.
+
+	Here is the list:
+
+	{{range .Policy.DenyList.Patterns}}
+	- {{.}}
+	{{end}}
+
+	**Per command policy which must be adhered to while using the command :
+
+	{{range .Policy.Commands}}
+	Command Name : {{.Name}}
+	Allowed intended use : {{.Description}}
+	{{if gt (len .Positionals) 0}}
+	Allowed list of positionals on command :
+
+		{{range $i, $pos := .Positionals}}
+		Command accepts {{ordinal (add $i 1)}} positional arg
+		Positional argument index : {{$pos.Index}}
+		Required : {{if $pos.Required}} Yes {{else}} No {{end}}
+		{{if gt (len $pos.RejectList) 0}}
+		For this positional the following values are prohibited literally:
+		{{range $pos.RejectList}}
+		- {{.}}
+		{{end}}
+		{{end}}
+		{{if gt (len $pos.RejectPattern) 0}}
+		For this positional, values satisfying the following regular expressions are prohibited:
+		{{range $pos.RejectPattern}}
+		- {{.}}
+		{{end}}
+		{{end}}
+		{{if gt (len $pos.AcceptPattern) 0}}
+		For this positional, values satisfying the following regular expressions are accepted; reject patterns take precedence over accept patterns:
+		{{range $pos.AcceptPattern}}
+		- {{.}}
+		{{end}}
+		{{end}}
+		{{end}}
+
+	{{end}}
+	{{if gt (len .Flags) 0}}
+	Allowed flags on the command :
+
+		{{range .Flags}}
+		Flag name : {{.Name}}
+		{{if .TakesVal}}
+		Allowed flag value regex pattern : {{.ValuePattern}}
+	 	{{end}}
+		{{end}}
+	{{end}}
+	{{end}}
+	`
+
+	templ := template.New("shell security policy template").Funcs(template.FuncMap{
+		"ordinal": b.ordinal,
+		"add": func(a, b int) int {
+			return a + b
+		},
+	})
+
+	parsedTempl, err := templ.Parse(shellPolicyTempl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	err = parsedTempl.Execute(&buf, b)
+	if err != nil {
+		return "", err
+	}
+
+	return buf.String(), nil
+}
+
+func (b *bouncer) constructCmd(cmd *remoteSSHFunctionCall) (string, error) {
+
+	dataMap := make(map[string]string)
+
+	for _, pos := range cmd.Positionals {
+		dataMap[strconv.Itoa(pos.Index)] = pos.Value
+	}
+
+	for _, f := range cmd.Flags {
+
+		if b.Policy.CommandsMap[cmd.Command].FlagsMap[f.Name].TakesVal {
+			if b.Policy.CommandsMap[cmd.Command].FlagsMap[f.Name].Glued {
+				dataMap[f.Name] = f.Name + "=" + f.Value
+			} else {
+				dataMap[f.Name] = f.Name + " " + f.Value
+			}
+		} else {
+			dataMap[f.Name] = f.Name
+		}
+	}
+
+	cmdTempl := b.Policy.CommandsMap[cmd.Command].Template
+
+	funcMap := template.FuncMap{
+		"flag": func(flags ...string) string {
+			var parts []string
+			for _, f := range flags {
+				if val, ok := dataMap[f]; ok {
+					parts = append(parts, val)
+				}
+			}
+			return strings.Join(parts, " ")
+		},
+
+		"pos": func(positions ...int) string {
+			var parts []string
+			for _, p := range positions {
+				if val, ok := dataMap[strconv.Itoa(p)]; ok {
+					parts = append(parts, val)
+				}
+			}
+			return strings.Join(parts, " ")
+		},
+	}
+
+	templ, err := template.New("command template").Funcs(funcMap).Parse(cmdTempl)
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+
+	if err := templ.Execute(&buf, nil); err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(buf.String()), nil
+}

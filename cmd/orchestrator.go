@@ -27,8 +27,10 @@ func newOrchestrator(transport Transport, registry Registry) *orchestrator {
 	orc := &orchestrator{
 		registry:       registry,
 		transport:      transport,
+
 		sessionMapLock: &sync.Mutex{},
 		sessionMap:     make(map[sessionKey]*session),
+
 		vmLock:         &sync.Mutex{},
 		vmMap:          make(map[string]*sync.Mutex),
 	}
@@ -47,23 +49,6 @@ func (o *orchestrator) bootstrap() error {
 	}
 
 	return nil
-}
-
-
-func (o *orchestrator) pruneSession() {
-
-	for {
-		
-		time.Sleep(pruneInterval)
-		o.sessionMapLock.Lock()
-		for sKey, s := range o.sessionMap {
-			if s.status == awaitingMachineSelection && time.Now().After(s.lastActiveAt.Add(sessionExpiry)) {
-				delete(o.sessionMap, sKey)
-				go s.removeMachineSelectionKeyboard()
-			}
-		}
-		o.sessionMapLock.Unlock()
-	}
 }
 
 // TODO : trigger bootstrap when a new machine is added through the cli while raven daemon is running
@@ -87,10 +72,10 @@ func (o *orchestrator) run() error {
 
 		select {
 
-		/* so for the scenario of race between : 
+		/* so for the scenario of race between :
 		 * routines of message handlers and callback handlers trying to work with same session
 		 * you can only fire a call back handler routine after the handle message routine is done with it's job
-		 */ 
+		 */
 		case req := <-msgCh:
 			go o.handleMessage(req)
 
@@ -115,13 +100,29 @@ func (o *orchestrator) run() error {
 	}
 }
 
+func (o *orchestrator) pruneSession() {
+
+	for {
+
+		time.Sleep(pruneInterval)
+		o.sessionMapLock.Lock()
+		for sKey, s := range o.sessionMap {
+			if s.status == awaitingMachineSelection && time.Now().After(s.lastActiveAt.Add(sessionExpiry)) {
+				delete(o.sessionMap, sKey)
+				go s.removeMachineSelectionKeyboard()
+			}
+		}
+		o.sessionMapLock.Unlock()
+	}
+}
+
 func (o *orchestrator) handleCallback(cb *tgCallBackQuery) error {
 
 	o.sessionMapLock.Lock()
 	defer o.sessionMapLock.Unlock()
 
 	sessionKey := sessionKey{
-		chatId:   cb.Message.Chat.Id,
+		chatId: cb.Message.Chat.Id,
 	}
 
 	// session key is wrong when callbacks come after thread creation
