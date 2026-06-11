@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
 
 	"google.golang.org/genai"
 )
@@ -60,7 +62,7 @@ Stop issuing commands when you have sufficient evidence to confidently explain t
 - Do not retry a rejected command. Reason about an alternative approach.
 `
 
-var geminiExecuteSSHDeclaration = &genai.FunctionDeclaration{
+var gemExecuteSSHDecl = &genai.FunctionDeclaration{
 	Name:        "execute_ssh",
 	Description: "executes bash commands on client machines",
 	Parameters: &genai.Schema{
@@ -110,20 +112,21 @@ var geminiExecuteSSHDeclaration = &genai.FunctionDeclaration{
 				Type:        genai.TypeString,
 				Description: "what you know so far and why you are running this command",
 			},
+			"update": {
+				Type:        genai.TypeString,
+				// TODO: Better description which enforces some kind of present tense language
+				Description: "interim update describing your current state and action you are performing in 20-30 words.",
+			},
 		},
-		Required: []string{"command", "reason"},
+		Required: []string{"command", "reason", "update"},
 	},
 }
 
 var tools = &genai.Tool{
-	FunctionDeclarations: []*genai.FunctionDeclaration{geminiExecuteSSHDeclaration},
+	FunctionDeclarations: []*genai.FunctionDeclaration{gemExecuteSSHDecl},
 }
 
-const (
-	ToolExecuteSSH = "execute_ssh"
-)
-
-var reportSchema = &genai.Schema{
+var gemReportSchema = &genai.Schema{
 	Type: genai.TypeObject,
 	Properties: map[string]*genai.Schema{
 		"summary": {
@@ -154,7 +157,7 @@ var reportSchema = &genai.Schema{
 		},
 		"recommendation": {
 			Type:        genai.TypeString,
-			Description: "Recommended remediation fix for the issue",
+			Description: "Recommended remediation for the issue",
 		},
 		"confidence_level": {
 			Type: genai.TypeString,
@@ -184,30 +187,142 @@ func reportConfidenceEnum() []string {
 	}
 }
 
+var gemInvestigationHistorySchema = &genai.Schema{
+	Description: "Chronological record of the complete investigation performed to diagnose the machine and answer the user's query.",
+	Type:        genai.TypeObject,
+	Properties: map[string]*genai.Schema{
+		"machineInfo": {
+			Type:        genai.TypeObject,
+			Description: "Information about the machine that was investigated.",
+			Properties: map[string]*genai.Schema{
+				"name": {
+					Type:        genai.TypeString,
+					Description: "Unique machine name or identifier provided at the start of the investigation.",
+				},
+				"description": {
+					Type:        genai.TypeString,
+					Description: "Machine description provided at the start of investigation..",
+				},
+			},
+			Required: []string{"name", "description"},
+		},
+
+		"query": {
+			Type:        genai.TypeString,
+			Description: "Original user request or problem statement that initiated the investigation.",
+		},
+
+		"steps": {
+			Type:        genai.TypeArray,
+			Description: "Chronological sequence of investigation steps performed while diagnosing the machine.",
+			Items: &genai.Schema{
+				Type:        genai.TypeObject,
+				Description: "A single investigation step containing one or more tool invocations.",
+				Properties: map[string]*genai.Schema{
+					"step_number": {
+						Type:        genai.TypeString,
+						Description: "Sequential step number in the investigation timeline.",
+					},
+
+					"tool_calls": {
+						Type:        genai.TypeArray,
+						Description: "All tool invocations performed during this investigation step.",
+						Items: &genai.Schema{
+							Type:        genai.TypeObject,
+							Description: "Record of a single tool invocation and the reasoning behind it.",
+							Properties: map[string]*genai.Schema{
+								"name": {
+									Type:        genai.TypeString,
+									Description: "Name of the tool that was invoked.",
+								},
+
+								"action": {
+									Type:        genai.TypeString,
+									Description: "Specific action performed using the tool, including relevant parameters and intent.",
+								},
+
+								"output_summary": {
+									Type:        genai.TypeString,
+									Description: "Concise summary of the tool output, highlighting only information relevant to the investigation.",
+								},
+
+								"reasoning": {
+									Type:        genai.TypeString,
+									Description: "Reason for performing this tool invocation/action and the information expected to be obtained.",
+								},
+
+								"observation": {
+									Type:        genai.TypeString,
+									Description: "Findings inferred from the tool output and how those findings influenced subsequent investigation steps.",
+								},
+							},
+							Required: []string{
+								"name",
+								"action",
+								"output_summary",
+								"reasoning",
+								"observation",
+							},
+						},
+					},
+				},
+				Required: []string{
+					"step_number",
+					"tool_calls",
+				},
+			},
+		},
+	},
+	Required: []string{
+		"machineInfo",
+		"query",
+		"steps",
+	},
+}
+
+var gemResponseSchema = &genai.Schema{
+	Type:        genai.TypeObject,
+	Description: "Agent response envelope. Exactly one response type should be present.",
+	Properties: map[string]*genai.Schema{
+		"final_response": {
+			Type: genai.TypeObject,
+			Properties: map[string]*genai.Schema{
+				"investigation_report":  gemReportSchema,
+				"investigation_history": gemInvestigationHistorySchema,
+			},
+			Required: []string{"final_report", "investigation_history"},
+		},
+	},
+}
+
 const (
 	MaxGeminiTemperature = 0.2
 )
 
 type geminiConf struct {
-	apiKey            string
-	systemPrompt      string
-	temperature       float32
-	maxTokens         int32
-	responseMIMEType  string
-	finalReportSchema *genai.Schema
-	tools             *genai.Tool
+	apiKey           string
+	systemPrompt     string
+	temperature      float32
+	maxTokens        int32
+	responseMIMEType string
+	responseSchema   *genai.Schema
+	tools            *genai.Tool
 }
 
 type gemini struct {
 	model string
 	geminiConf
-	client *genai.Client
+	client    *genai.Client
+	history   []*genai.Content
+	errPrefix string
 }
 
 func newGemini(conf *geminiConf) (*gemini, error) {
 
 	gemini := &gemini{
 		geminiConf: *conf,
+		errPrefix:  "llm error :",
+		history:    []*genai.Content{},
 	}
 
 	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
@@ -228,46 +343,171 @@ func (g *gemini) getConf() *genai.GenerateContentConfig {
 	return &genai.GenerateContentConfig{}
 }
 
-func (g *gemini) getFunctionCalls(payload *genai.GenerateContentResponse) []*genai.FunctionCall {
+func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
 
-	var functionCalls []*genai.FunctionCall
-	if len(payload.Candidates) > 0 {
-		for _, p := range payload.Candidates[0].Content.Parts {
+	content := &genai.Content{
+		Role: roleUser,
+	}
+
+	var geminiParts []*genai.Part
+
+	for _, p := range parts {
+		if len(p.Text) != 0 {
+
+			part := &genai.Part{
+				Text: p.Text,
+			}
+
+			geminiParts = append(geminiParts, part)
+		}
+
+		if p.FunctionResponse != nil {
+			fr := &genai.FunctionResponse{
+				ID:   p.FunctionResponse.ID,
+				Name: p.FunctionResponse.Name,
+				Response: map[string]any{
+					"result": p.FunctionResponse.Result,
+				},
+			}
+
+			part := &genai.Part{
+				FunctionResponse: fr,
+			}
+
+			geminiParts = append(geminiParts, part)
+		}
+	}
+
+	content.Parts = geminiParts
+
+	return []*genai.Content{content}
+}
+
+func (g *gemini) getLLMMessage(resp *genai.GenerateContentResponse) *llmMessage {
+	var msg llmMessage
+
+	if len(resp.Candidates) > 0 {
+
+		msg.Role = role(resp.Candidates[0].Content.Role)
+		if len(resp.Text()) != 0 {
+			part := llmPart{
+				Text: resp.Text(),
+			}
+			msg.Parts = append(msg.Parts, &part)
+		}
+
+		for _, p := range resp.Candidates[0].Content.Parts {
 			if p.FunctionCall != nil {
-				functionCalls = append(functionCalls, p.FunctionCall)
+
+				fc := llmFunctionCall{
+					ID:   p.FunctionCall.ID,
+					Name: p.FunctionCall.Name,
+					Args: p.FunctionCall.Args,
+				}
+
+				part := llmPart{
+					FunctionCall: &fc,
+				}
+
+				msg.Parts = append(msg.Parts, &part)
 			}
 		}
 	}
 
-	return functionCalls
+	return &msg
 }
 
-func (g *gemini) generate(ctx context.Context, prompt string) (*genai.GenerateContentResponse, error) {
+const (
+	gemInvalidArgument    = "INVALID_ARGUMENT"
+	gemFailedPrecondition = "FAILED_PRECONDITION"
+	gemPermissionDenied   = "PERMISSION_DENIED"
+	gemNotFound           = "NOT_FOUND"
+	gemResourceExhausted  = "RESOURCE_EXHAUSTED"
+	gemCancelled          = "CANCELLED"
+	gemInternalServerErr  = "INTERNAL"
+	gemUnavailable        = "UNAVAILABLE"
+	gemDeadlineExceeded   = "DEADLINE_EXCEEDED"
+)
 
-	promptObj := genai.Text(prompt)
-	const maxAttempts = 2
+func (g *gemini) handleError(err error) *agentErr {
+
+	var apiErr *genai.APIError
+
+	if errors.As(err, &apiErr) {
+		switch apiErr.Status {
+		// Fatal
+		case gemPermissionDenied, gemFailedPrecondition, gemInvalidArgument, gemNotFound:
+			err = fmt.Errorf("%s %s", g.errPrefix, err.Error())
+			return newAgentError(agentErrFatal, err)
+		// retry
+		case gemResourceExhausted, gemInternalServerErr, gemUnavailable, gemDeadlineExceeded:
+			err = fmt.Errorf("%s %s", g.errPrefix, err.Error())
+			return newAgentError(agentErrLlmRetry, err)
+		}
+	}
+
+	return nil
+}
+
+func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.GenerateContentResponse, *agentErr) {
+
 	var (
 		resp *genai.GenerateContentResponse
 		err  error
 	)
 
-	for range maxAttempts {
-		resp, err = g.client.Models.GenerateContent(ctx, g.model, promptObj, g.getConf())
-		if err != nil {
-			return nil, err
+	t := BaseRetryBackoffTime
+
+	for i := range MaxRetry {
+
+		resp, err = g.client.Models.GenerateContent(ctx, g.model, contents, g.getConf())
+
+		if err == nil {
+			break
+		} else {
+			if agentErr := g.handleError(err); agentErr != nil && agentErr.kind == agentErrFatal {
+				return nil, agentErr
+			}
+		}
+
+		time.Sleep(min(t, MaxRetryTime))
+		if t < MaxRetryTime {
+			t = BaseRetryBackoffTime * time.Duration((1 << (i + 1)))
 		}
 	}
+
+	if err != nil {
+		return nil, g.handleError(err)
+	}
+
 	return resp, nil
 }
 
-func (g *gemini) getFinalReport(payload *genai.GenerateContentResponse) (*finalReport, error) {
+func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *agentErr) {
 
-	var finalReport finalReport
-	err := json.Unmarshal([]byte(payload.Text()), &finalReport)
+	var contents []*genai.Content
 
-	if err != nil {
-		return nil, err
+	if len(g.history) != 0 {
+		contents = append(contents, g.history...)
 	}
 
-	return &finalReport, nil
+	contents = append(contents, g.getContent(parts)...)
+
+	resp, agentErr := g.call(ctx, contents)
+
+	// TODO: handle finish reason
+	if agentErr != nil {
+		if agentErr.kind == agentErrLlmRetry {
+			return nil, newAgentError(agentErrTerminate, agentErr.err)
+		}
+		return nil, agentErr
+	}
+
+	g.history = contents
+
+	if len(resp.Candidates) > 0 {
+		g.history = append(g.history, resp.Candidates[0].Content)
+	}
+
+	return g.getLLMMessage(resp), nil
 }

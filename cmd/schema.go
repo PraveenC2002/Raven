@@ -160,11 +160,42 @@ type shellPolicy struct {
 	DenyList    *shellDenyList `toml:"DenyList"`
 }
 
-type remoteSSHFunctionCall struct {
+type role string
 
+const (
+	roleUser  = "user"
+	roleModel = "model"
+	roleTool  = "tool"
+)
+
+type llmFunctionCall struct {
+	ID   string
+	Name string
+	Args map[string]any
+}
+
+type llmFunctionResponse struct {
+	ID     string
+	Name   string
+	Result string
+}
+
+type llmPart struct {
+	Text             string
+	FunctionCall     *llmFunctionCall
+	FunctionResponse *llmFunctionResponse
+}
+
+type llmMessage struct {
+	Role role
+	Text  string
+	Parts []*llmPart
+}
+
+type remoteSSHFunctionCall struct {
 	Command string `json:"command"`
 
-	Flags   []*struct {
+	Flags []*struct {
 		Name  string `json:"name"`
 		Value string `json:"value,omitempty"`
 	} `json:"flags,omitempty"`
@@ -175,9 +206,10 @@ type remoteSSHFunctionCall struct {
 	} `json:"positionals,omitempty"`
 
 	Reason string `json:"reason"`
+	Update string `json:"update"`
 }
 
-type finalReport struct {
+type diagnosisReport struct {
 	Summary   string `json:"summary"`
 	RootCause string `json:"root_cause"`
 	Evidence  []*struct {
@@ -187,4 +219,40 @@ type finalReport struct {
 	Recommendation   string                `json:"recommendation"`
 	Confidence       finalReportConfidence `json:"confidence"`
 	ConfidenceReason string                `json:"confidence_reason"`
+}
+
+type llmToolCall struct {
+	Name          string `json:"name"`
+	Action        string `json:"action"`
+	OutputSummary string `json:"output_summary"`
+	Reasoning     string `json:"reasoning"`
+	Observation   string `json:"observation"`
+}
+
+type investigationStep struct {
+	StepNumber int            `json:"step_number"`
+	ToolCalls  []*llmToolCall `json:"tool_calls"`
+}
+
+type investigationHistory struct {
+	MachineInfo *struct {
+		Name        string
+		Description string
+	} `json:"machineInfo"`
+	Query string               `json:"query"`
+	Steps []*investigationStep `json:"steps"`
+}
+
+type llmResponseErrors struct {
+	textUnmarshalErr string
+}
+
+type llmResponse struct {
+	FinalResponse *llmDiagnosisResponse
+	clientErrors *llmResponseErrors
+}
+
+type llmDiagnosisResponse struct {
+	Report  *diagnosisReport  `json:"investigation_report"`
+	History *investigationHistory `json:"investigation_history"`
 }

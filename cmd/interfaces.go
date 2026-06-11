@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-
-	"google.golang.org/genai"
 )
 
 type Transport interface {
@@ -24,9 +22,7 @@ type Orchestrator interface {
 type Agent interface{}
 
 type LLM interface {
-	generate(context.Context, string) (*genai.GenerateContentResponse, error)
-	getFunctionCalls(*genai.GenerateContentResponse) []*genai.FunctionCall
-	getFinalReport(payload *genai.GenerateContentResponse) (*finalReport, error)
+	generate(context.Context, []*llmPart) (*llmMessage, *agentErr)
 }
 
 type Bouncer interface {
@@ -35,7 +31,7 @@ type Bouncer interface {
 }
 
 type LLMTool interface {
-	toolCall(*genai.FunctionCall) (any, error)
+	toolCall(*llmFunctionCall) (*llmFunctionResponse, *agentErr)
 }
 
 type RemoteSSH interface {

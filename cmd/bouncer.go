@@ -13,12 +13,12 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-type bouncer struct {
+type sshBouncer struct {
 	Policy    *shellPolicy
 	errPrefix string
 }
 
-func newBouncer() (*bouncer, error) {
+func newBouncer() (*sshBouncer, error) {
 
 	f, err := os.Open("SSHPolicy.toml")
 	if err != nil {
@@ -82,13 +82,13 @@ func newBouncer() (*bouncer, error) {
 		policy.CommandsMap[cmd.Name] = cmd
 	}
 
-	return &bouncer{
+	return &sshBouncer{
 		Policy:    &policy,
 		errPrefix: "validate command error :",
 	}, nil
 }
 
-func (b *bouncer) ordinal(n int) string {
+func (b *sshBouncer) ordinal(n int) string {
 	switch n % 100 {
 	case 11, 12, 13:
 		return fmt.Sprintf("%dth", n)
@@ -106,7 +106,7 @@ func (b *bouncer) ordinal(n int) string {
 	}
 }
 
-func (b *bouncer) checkDenyList(val string) error {
+func (b *sshBouncer) checkDenyList(val string) error {
 
 	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errPrefix, val)
 
@@ -123,7 +123,7 @@ func (b *bouncer) checkDenyList(val string) error {
 	return nil
 }
 
-func (b *bouncer) validate(fc *remoteSSHFunctionCall) error {
+func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 
 	cmd, ok := b.Policy.CommandsMap[fc.Command]
 	if !ok {
@@ -222,7 +222,7 @@ func (b *bouncer) validate(fc *remoteSSHFunctionCall) error {
 	return nil
 }
 
-func (b *bouncer) describe() (string, error) {
+func (b *sshBouncer) describe() (string, error) {
 
 	shellPolicyTempl := `
 	This is shell command security policy.
@@ -317,7 +317,7 @@ func (b *bouncer) describe() (string, error) {
 	return buf.String(), nil
 }
 
-func (b *bouncer) constructCmd(cmd *remoteSSHFunctionCall) (string, error) {
+func (b *sshBouncer) constructCmd(cmd *remoteSSHFunctionCall) (string, error) {
 
 	dataMap := make(map[string]string)
 
