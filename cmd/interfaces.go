@@ -31,7 +31,11 @@ type Bouncer interface {
 }
 
 type LLMTool interface {
-	toolCall(*llmFunctionCall) (*llmFunctionResponse, *agentErr)
+	setUpdateEmitter(emitUpdate func(string))
+	getToolPolicy(toolName string) (string, error)
+	validateFC(*remoteSSHFunctionCall) error
+	callTool(context.Context, *llmFunctionCall) (*llmFunctionResponse, *agentErr)
+	close() error // will always result in shutting down the system
 }
 
 type RemoteSSH interface {

@@ -15,14 +15,14 @@ import (
 
 type sshBouncer struct {
 	Policy    *shellPolicy
-	errPrefix string
+	errDomain string
 }
 
-func newBouncer() (*sshBouncer, error) {
+func newSSHBouncer() (*sshBouncer, error) {
 
 	f, err := os.Open("SSHPolicy.toml")
 	if err != nil {
-		return nil, fmt.Errorf("could not open SSHPolicy file : %v", err)
+		return nil, fmt.Errorf("could not open SSHPolicy file : %s", err.Error())
 	}
 
 	var policy shellPolicy
@@ -84,31 +84,13 @@ func newBouncer() (*sshBouncer, error) {
 
 	return &sshBouncer{
 		Policy:    &policy,
-		errPrefix: "validate command error :",
+		errDomain: "validate command error :",
 	}, nil
-}
-
-func (b *sshBouncer) ordinal(n int) string {
-	switch n % 100 {
-	case 11, 12, 13:
-		return fmt.Sprintf("%dth", n)
-	default:
-		switch n % 10 {
-		case 1:
-			return fmt.Sprintf("%dst", n)
-		case 2:
-			return fmt.Sprintf("%dnd", n)
-		case 3:
-			return fmt.Sprintf("%drd", n)
-		default:
-			return fmt.Sprintf("%dth", n)
-		}
-	}
 }
 
 func (b *sshBouncer) checkDenyList(val string) error {
 
-	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errPrefix, val)
+	violationErr := fmt.Errorf("%s %s can't be accepted as command argument/value", b.errDomain, val)
 
 	if slices.Contains(b.Policy.DenyList.Exact, val) {
 		return violationErr
@@ -127,7 +109,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 
 	cmd, ok := b.Policy.CommandsMap[fc.Command]
 	if !ok {
-		return fmt.Errorf("%s command not allowed", b.errPrefix)
+		return fmt.Errorf("%s command not allowed", b.errDomain)
 	}
 
 	// check flags
@@ -136,11 +118,11 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 		flag, ok := cmd.FlagsMap[fcFlag.Name]
 
 		if !ok {
-			return fmt.Errorf("%s flag %s not allowed on command %s", b.errPrefix, fcFlag.Name, fc.Command)
+			return fmt.Errorf("%s flag %s not allowed on command %s", b.errDomain, fcFlag.Name, fc.Command)
 		}
 
 		if len(fcFlag.Value) == 0 && flag.TakesVal {
-			return fmt.Errorf("%s flag %s value not provided on command %s", b.errPrefix, fcFlag.Name, fc.Command)
+			return fmt.Errorf("%s flag %s value not provided on command %s", b.errDomain, fcFlag.Name, fc.Command)
 		}
 
 		if flag.TakesVal {
@@ -149,7 +131,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 				return err
 			}
 			if !flag.ValueRegex.MatchString(fcFlag.Value) {
-				return fmt.Errorf("%s %s value not allowed on %s flag on command %s", b.errPrefix, fcFlag.Value, fcFlag.Name, fc.Command)
+				return fmt.Errorf("%s %s value not allowed on %s flag on command %s", b.errDomain, fcFlag.Value, fcFlag.Name, fc.Command)
 			}
 		}
 	}
@@ -163,14 +145,14 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 		}
 
 		if fcPos.Index < 1 || fcPos.Index > len(cmd.Positionals) {
-			err = fmt.Errorf("%s positional with index %d not defined in command %s according to shell security policy", b.errPrefix, fcPos.Index, fc.Command)
+			err = fmt.Errorf("%s positional with index %d not defined in command %s according to shell security policy", b.errDomain, fcPos.Index, fc.Command)
 			return err
 		}
 
 		// check for duplicate positionals
 		for j := i - 1; j >= 0; j-- {
 			if fc.Positionals[j].Index == fc.Positionals[i].Index {
-				err = fmt.Errorf("%s positional with index %d passed more than once on command %s", b.errPrefix, fc.Positionals[j].Index, fc.Command)
+				err = fmt.Errorf("%s positional with index %d passed more than once on command %s", b.errDomain, fc.Positionals[j].Index, fc.Command)
 				return err
 			}
 		}
@@ -178,13 +160,13 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 		posIdx := fcPos.Index - 1
 
 		if slices.Contains(cmd.Positionals[posIdx].RejectList, fcPos.Value) {
-			return fmt.Errorf("%s %s positional value at %s positional not allowed for command %s", b.errPrefix, fcPos.Value, b.ordinal(posIdx+1), fc.Command)
+			return fmt.Errorf("%s %s positional value at %s positional not allowed for command %s", b.errDomain, fcPos.Value, ordinal(posIdx+1), fc.Command)
 		}
 
 		for j, pattern := range cmd.Positionals[posIdx].RejectPatternRegex {
 			patternStr := cmd.Positionals[posIdx].RejectPattern[j]
 			if pattern.MatchString(fcPos.Value) {
-				return fmt.Errorf("%s positional value satisfying regex pattern %s at %s positional not allowed for command %s", b.errPrefix, patternStr, b.ordinal(posIdx+1), fc.Command)
+				return fmt.Errorf("%s positional value satisfying regex pattern %s at %s positional not allowed for command %s", b.errDomain, patternStr, ordinal(posIdx+1), fc.Command)
 			}
 		}
 
@@ -192,7 +174,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 			continue
 		}
 
-		violationErr := fmt.Sprintf("%s positional value %s on positional argument with index %d violates command policy of command %s", b.errPrefix, fcPos.Value, fcPos.Index, fc.Command)
+		violationErr := fmt.Sprintf("%s positional value %s on positional argument with index %d violates command policy of command %s", b.errDomain, fcPos.Value, fcPos.Index, fc.Command)
 		matched := false
 		for _, reg := range cmd.Positionals[posIdx].AcceptPatternRegex {
 			matched = matched || reg.MatchString(fcPos.Value)
@@ -213,7 +195,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 				}
 			}
 			if !found {
-				err := fmt.Errorf("%s positional with index %d is required on command %s but not provided", b.errPrefix, pos.Index, fc.Command)
+				err := fmt.Errorf("%s positional with index %d is required on command %s but not provided", b.errDomain, pos.Index, fc.Command)
 				return err
 			}
 		}
@@ -222,11 +204,16 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 	return nil
 }
 
-func (b *sshBouncer) describe() (string, error) {
+func (b *sshBouncer) describe(toolName string) (string, error) {
 
 	shellPolicyTempl := `
-	This is shell command security policy.
+	This is {{.ToolName}} tool's shell command security policy.
 	Shell commands you wish to run using execute_ssh tool must strictly adhere to this shell security policy.
+
+	Every command you request is validated against the following read-only security policy before execution.
+	Commands that violate the policy will be rejected.
+	If a command is rejected, reason about why and try an alternative approach.
+	Do not retry the same rejected command.
 
 	- Avoid long hanging commands.
 	- Variadic positional arguments are strictly not allowed.
@@ -297,7 +284,7 @@ func (b *sshBouncer) describe() (string, error) {
 	`
 
 	templ := template.New("shell security policy template").Funcs(template.FuncMap{
-		"ordinal": b.ordinal,
+		"ordinal": ordinal,
 		"add": func(a, b int) int {
 			return a + b
 		},
@@ -309,7 +296,15 @@ func (b *sshBouncer) describe() (string, error) {
 	}
 
 	var buf bytes.Buffer
-	err = parsedTempl.Execute(&buf, b)
+	payload := &struct {
+		*sshBouncer
+		ToolName string
+	}{
+		sshBouncer: b,
+		ToolName:   toolName,
+	}
+
+	err = parsedTempl.Execute(&buf, &payload)
 	if err != nil {
 		return "", err
 	}

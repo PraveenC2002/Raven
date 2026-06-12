@@ -100,7 +100,7 @@ type machine struct {
 	Name        string    `db:"name"`
 	Description string    `db:"description"`
 	CreatedAt   time.Time `db:"created_at"`
-	connectionInfo
+	*connectionInfo
 }
 
 type connectionInfo struct {
@@ -187,7 +187,7 @@ type llmPart struct {
 }
 
 type llmMessage struct {
-	Role role
+	Role  role
 	Text  string
 	Parts []*llmPart
 }
@@ -248,11 +248,11 @@ type llmResponseErrors struct {
 }
 
 type llmResponse struct {
-	FinalResponse *llmDiagnosisResponse
-	clientErrors *llmResponseErrors
+	FinalResponse *agentResult
+	clientErrors  *llmResponseErrors
 }
 
-type llmDiagnosisResponse struct {
-	Report  *diagnosisReport  `json:"investigation_report"`
+type agentResult struct {
+	Report  *diagnosisReport      `json:"investigation_report"`
 	History *investigationHistory `json:"investigation_history"`
 }

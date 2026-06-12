@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,18 +10,21 @@ import (
 	"os"
 	"strconv"
 	"text/template"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// TODO:creating remoteSSH instance per agent... maybe need to re think tool registry
 type remoteSSH struct {
-	client    *ssh.Client
-	bouncer   *sshBouncer
-	errPrefix string
+	client     *ssh.Client
+	bouncer    *sshBouncer
+	errDomain  string
+	emitUpdate func(string)
 }
 
-// Alpha discovery!! We can have bash scripts through toml... with same security architecture (and metachars too in our commands)
+// Alpha discovery!! We can have bash scripts through toml... 
+// with same security architecture (and metachars too in our commands)
+// TODO : implement dial with ctx..
 func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 
 	pvKey, err := os.ReadFile(connInfo.KeyPath)
@@ -55,25 +59,72 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+
+	bouncer, err := newSSHBouncer()
+	if err != nil {
+		return nil, err
+	}
 
 	return &remoteSSH{
 		client:    client,
-		errPrefix: ToolExecuteSSH + " error :",
+		bouncer:   bouncer,
+		errDomain: ToolExecuteSSH + " error :",
 	}, nil
 }
 
-// TODO: persist ssh connection without agent having knowledge of the SSH conn
-// TODO: shell command timeout
-// TODO: we don't run parallel sessions, need to rethink sessions
-func (r *remoteSSH) execute(cmd string) (*sshOutput, error) {
+const (
+	shellCommandTimeout = 30 * time.Second
+)
 
+func (r *remoteSSH) execute(ctx context.Context, cmd string) (*sshOutput, error) {
+
+	r.emitUpdate("creating a ssh session with machine")
 	sess, err := r.client.NewSession()
 	if err != nil {
 		return nil, err
 	}
-	defer sess.Close()
 
-	res, err := sess.CombinedOutput(cmd)
+	success := false
+	defer func() {
+		if success {
+			sess.Close()
+		}
+	}()
+
+	r.emitUpdate("executing shell command")
+
+	// policy author needs to implement command level timeout by themselves
+	// If a command level timeout mechanism is not present then a command might be left running on remote machine while the ssh connection is closed
+	sshCtx, cancel := context.WithTimeout(ctx, shellCommandTimeout)
+	defer cancel()
+
+	done := make(chan struct{}, 1)
+
+	var res []byte
+
+	go func() {
+		res, err = sess.CombinedOutput(cmd)
+		done <- struct{}{}
+	}()
+
+	select {
+
+	case <-done:
+		success = true
+	case <-sshCtx.Done():
+		if errors.Is(sshCtx.Err(), context.DeadlineExceeded) {
+			deadLineExceededErr := fmt.Errorf("%s command hung while executing", r.errDomain)
+			// yes I want to bonk the ssh conn because time out responsibility is on policy author,
+			// if author time out breached it should be treated as error
+			r.client.Close()
+			return nil, deadLineExceededErr
+		} else {
+			r.client.Close()
+			return nil, fmt.Errorf("%s ssh context cancelled", r.errDomain)
+		}
+	}
+
 	resText := string(res)
 
 	var exitErr *ssh.ExitError
@@ -96,55 +147,91 @@ func (r *remoteSSH) execute(cmd string) (*sshOutput, error) {
 }
 
 func (r *remoteSSH) closeConn() error {
+	r.emitUpdate("closing ssh connection")
 	return r.client.Close()
 }
 
-// errors in tool call need to be handled properly,
-// because some errors need to propagate to LLM and
-// some need to be handled in the system itself
 // remote ssh implements llmTool interface
-// need to validate fc payload after unmarshal
 
-func (r *remoteSSH) returnErrorFr(fc *llmFunctionCall, err error) *llmFunctionResponse {
-	errFr := &llmFunctionResponse{
-		ID:     fc.ID,
-		Name:   fc.Name,
-		Result: err.Error(),
-	}
-	return errFr
+func (r *remoteSSH) setUpdateEmitter(emitUpdate func(string)) {
+	r.emitUpdate = emitUpdate
 }
 
-func (r *remoteSSH) toolCall(fc *llmFunctionCall) (*llmFunctionResponse, *agentErr) {
+func (r *remoteSSH) getToolPolicy(toolName string) (string, error) {
+	policy, err := r.bouncer.describe(toolName)
+	if err != nil {
+		err = fmt.Errorf("%s tool policy retrieval error for tool %s.\nError : %s", r.errDomain, toolName, err.Error())
+		return "", err
+	}
+	return policy, nil
+}
 
-	var reqObj *remoteSSHFunctionCall
+func (r *remoteSSH) validateFC(obj *remoteSSHFunctionCall) error {
+
+	if len(obj.Command) == 0 {
+		return fmt.Errorf("%s inavlid %s function call args. Shell command name not provided.", r.errDomain, ToolExecuteSSH)
+	}
+
+	for i, f := range obj.Flags {
+		if len(f.Name) == 0 {
+			return fmt.Errorf("%s inavlid %s function call args. %s shell command flag passed without flag name.", r.errDomain, ToolExecuteSSH, ordinal(i+1))
+		}
+	}
+
+	for i, p := range obj.Positionals {
+		if len(p.Value) == 0 {
+			return fmt.Errorf("%s inavlid %s function call args. %s shell command positional passed without value.", r.errDomain, ToolExecuteSSH, ordinal(i+1))
+		}
+		if p.Index == 0 {
+			return fmt.Errorf("%s inavlid %s function call args. %s shell command positional index not provided.", r.errDomain, ToolExecuteSSH, ordinal(i+1))
+		}
+	}
+
+	if len(obj.Reason) == 0 {
+		return fmt.Errorf("%s inavlid %s function call args. Tool execution reason not provided.", r.errDomain, ToolExecuteSSH)
+	}
+
+	return nil
+}
+
+func (r *remoteSSH) callTool(ctx context.Context, fc *llmFunctionCall) (*llmFunctionResponse, *agentErr) {
+
+	var fcObj *remoteSSHFunctionCall
 
 	blob, err := json.Marshal(fc.Args)
 	if err != nil {
-		err = fmt.Errorf("%s failed to unmarshal function args.\nError : %s", r.errPrefix, err.Error())
-		return r.returnErrorFr(fc, err), nil
+		err = fmt.Errorf("%s failed to unmarshal function args.\nError : %s", r.errDomain, err.Error())
+		return newErrFr(fc, err), nil
 	}
 
-	err = json.Unmarshal(blob, &reqObj)
+	err = json.Unmarshal(blob, &fcObj)
 	if err != nil {
-		err = fmt.Errorf("%s failed to unmarshal function args.\nError : %s", r.errPrefix, err.Error())
-		return r.returnErrorFr(fc, err), nil
+		err = fmt.Errorf("%s failed to unmarshal function args.\nError : %s", r.errDomain, err.Error())
+		return newErrFr(fc, err), nil
 	}
 
-	err = r.bouncer.validate(reqObj)
+	err = r.validateFC(fcObj)
 	if err != nil {
-		err = fmt.Errorf("%s ssh command validation failed.\nError : %s", r.errPrefix, err.Error())
-		return r.returnErrorFr(fc, err), nil
+		return newErrFr(fc, err), nil
+	}
+	
+	r.emitUpdate("validating shell command")
+	err = r.bouncer.validate(fcObj)
+	if err != nil {
+		err = fmt.Errorf("%s shell command validation failed.\nError : %s", r.errDomain, err.Error())
+		return newErrFr(fc, err), nil
 	}
 
-	cmd, err := r.bouncer.constructCmd(reqObj)
+	r.emitUpdate("constructing shell command")
+	cmd, err := r.bouncer.constructCmd(fcObj)
 	if err != nil {
-		err = fmt.Errorf("%s ssh command construction failed.\nError : %s", r.errPrefix, err.Error())
+		err = fmt.Errorf("%s shell command construction failed.\nError : %s", r.errDomain, err.Error())
 		return nil, newAgentError(agentErrTerminate, err)
 	}
 
-	out, err := r.execute(cmd)
+	out, err := r.execute(ctx, cmd)
 	if err != nil {
-		err = fmt.Errorf("%s command %s execution failed.\nError : %s", r.errPrefix, cmd, err.Error())
+		err = fmt.Errorf("%s command %s execution failed.\nError : %s", r.errDomain, cmd, err.Error())
 		return nil, newAgentError(agentErrTerminate, err)
 	}
 
@@ -157,20 +244,27 @@ func (r *remoteSSH) toolCall(fc *llmFunctionCall) (*llmFunctionResponse, *agentE
 
 	tmpl, err := template.New("ssh output template").Parse(outputTemplate)
 	if err != nil {
-		err = fmt.Errorf("%s parsing output template failed\nError : %s", r.errPrefix, err.Error())
+		err = fmt.Errorf("%s parsing output template failed\nError : %s", r.errDomain, err.Error())
 		return nil, newAgentError(agentErrFatal, err)
 	}
 
 	var buf bytes.Buffer
 	err = tmpl.Execute(&buf, out)
 	if err != nil {
-		err = fmt.Errorf("%s executing output template failed\nError : %s", r.errPrefix, err.Error())
+		err = fmt.Errorf("%s executing output template failed\nError : %s", r.errDomain, err.Error())
 		return nil, newAgentError(agentErrFatal, err)
 	}
 
+	r.emitUpdate("returing shell command output")
 	return &llmFunctionResponse{
 		ID:     fc.ID,
 		Name:   fc.Name,
 		Result: buf.String(),
 	}, nil
+}
+
+func (r *remoteSSH) close() error {
+	// error dropped on purpose, because 
+	r.closeConn()
+	return nil
 }

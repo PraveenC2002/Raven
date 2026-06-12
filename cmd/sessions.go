@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strconv"
@@ -114,19 +115,16 @@ func (s *session) cbMachineSelection(cb *tgCallBackQuery) error {
 	return nil
 }
 
-func (s *session) diagnoseMachine(m *machine) error {
+func (s *session) handleDiagnoseMachineUpdates(updCh <-chan string) {
 
-	if state, ok := s.state.(awaitMachineSelectionState); ok {
-		payload := tgEditMessageText[any]{
-			ChatId:    s.chatId,
-			MessageId: state.keyboardMessageId,
-			Text:      "Starting machine " + m.Name + " diagnosis.",
-		}
-		_, err := s.transport.send(payload, endpointEditMessageText)
-		if err != nil {
-			return err
-		}
+	for {
+		// stubbed
+		// upd := <-updCh
+		
 	}
+}
+
+func (s *session) diagnoseMachine(m *machine) error {
 
 	vmLock := s.getVmLock(m.Name)
 	vmLock.Lock()
@@ -140,7 +138,26 @@ func (s *session) diagnoseMachine(m *machine) error {
 	s.threadId = *threadId
 
 	s.onThreadCreated(s.chatId, s.threadId)
+	
+	// TODO:errors beyond thread creation need to be handled properly, for now for the sake of simplicity we just return them
 
+	agentConf := &agentConf{
+		Machine: m,
+		Query: "stubbed", // TODO:get query from user
+	}
+	// TODO:stubbed ctx
+	a, err := newAgent(context.Background(), agentConf)
+	if err != nil {
+		return err
+	}
+
+	// TODO:handle agent result
+	_, aErr := a.run(context.Background())
+	if aErr != nil {
+		// TODO: handle agent err
+		return aErr.err
+	}
+	
 	return nil
 }
 

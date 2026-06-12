@@ -4,63 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"google.golang.org/genai"
 )
-
-const SystemPromptTemplate = `
-You are Raven, an autonomous SSH diagnosis agent. You have been deployed because a service on a remote machine is experiencing issues. Your sole purpose is to diagnose the root cause. You do not fix, modify, restart, or write anything — you only investigate and report.
-
----
-
-## Shell Policy
-Every command you request is validated against the following read-only security policy before execution. Commands that violate the policy will be rejected. If a command is rejected, reason about why and try an alternative approach. Do not retry the same rejected command.
-
-{{BOUNCER_POLICY}}
-
----
-
-## Diagnosis Methodology
-Work systematically, layer by layer:
-
-1. **Orient** — identify OS, distro, uptime, recent reboots
-2. **Locate** — find the affected service, check its status
-3. **Examine logs** — look for errors, panics, OOMs, segfaults
-4. **Check resources** — disk space, memory, CPU pressure
-5. **Check dependencies** — databases, upstream services, network connectivity
-6. **Correlate** — connect findings to form a root cause hypothesis
-7. **Verify** — confirm your hypothesis with one or two targeted commands before reporting
-
----
-
-## Common Services
-These machines typically run one or more of the following:
-
-- **Next.js apps** — via PM2 or systemd, check process status and PM2 logs
-- **Dockerized services** — check container status, resource usage, container logs
-- **PostgreSQL / MySQL / Redis** — check service status, connection counts, error logs
-- **Nginx** — reverse proxy and rate limiting, check error logs, config validity, upstream connectivity
-- **Systemd services** — check unit status, journal logs
-- **Node.js / Python backends** — check process status, application logs
-
----
-
-## Reasoning
-Every tool call must include your reasoning — what you know so far, what you suspect, and why this specific command advances the investigation. Do not run commands out of habit or checklist mentality. Every command must have a clear purpose given what you already know.
-
----
-
-## Termination
-Stop issuing commands when you have sufficient evidence to confidently explain the root cause. Do not over-investigate. If the root cause remains genuinely unclear after thorough investigation, report your best hypothesis with low confidence and the supporting evidence you found.
-
----
-
-## Constraints
-- Strictly read-only. Never attempt to modify, write, delete, move, or restart anything.
-- Do not make assumptions — verify with commands.
-- Do not retry a rejected command. Reason about an alternative approach.
-`
 
 var gemExecuteSSHDecl = &genai.FunctionDeclaration{
 	Name:        "execute_ssh",
@@ -113,7 +61,7 @@ var gemExecuteSSHDecl = &genai.FunctionDeclaration{
 				Description: "what you know so far and why you are running this command",
 			},
 			"update": {
-				Type:        genai.TypeString,
+				Type: genai.TypeString,
 				// TODO: Better description which enforces some kind of present tense language
 				Description: "interim update describing your current state and action you are performing in 20-30 words.",
 			},
@@ -122,7 +70,7 @@ var gemExecuteSSHDecl = &genai.FunctionDeclaration{
 	},
 }
 
-var tools = &genai.Tool{
+var gemTools = &genai.Tool{
 	FunctionDeclarations: []*genai.FunctionDeclaration{gemExecuteSSHDecl},
 }
 
@@ -290,57 +238,59 @@ var gemResponseSchema = &genai.Schema{
 				"investigation_report":  gemReportSchema,
 				"investigation_history": gemInvestigationHistorySchema,
 			},
-			Required: []string{"final_report", "investigation_history"},
+			Required: []string{"investigation_report", "investigation_history"},
 		},
 	},
 }
 
+// gemini config
 const (
-	MaxGeminiTemperature = 0.2
+	gemModel                    = "gemini-2.5-pro"
+	gemMaxTemperature   float32 = 0.2
+	gemMaxTokens        int32   = 8192
+	gemResponseMIMEType         = "application/json"
 )
 
-type geminiConf struct {
-	apiKey           string
-	systemPrompt     string
-	temperature      float32
-	maxTokens        int32
-	responseMIMEType string
-	responseSchema   *genai.Schema
-	tools            *genai.Tool
-}
-
 type gemini struct {
-	model string
-	geminiConf
-	client    *genai.Client
-	history   []*genai.Content
-	errPrefix string
+	client       *genai.Client
+	systemPrompt string
+	history      []*genai.Content
+	errDomain    string
 }
 
-func newGemini(conf *geminiConf) (*gemini, error) {
+func newGemini(ctx context.Context, systemPrompt string) (*gemini, error) {
 
-	gemini := &gemini{
-		geminiConf: *conf,
-		errPrefix:  "llm error :",
-		history:    []*genai.Content{},
-	}
-
-	client, err := genai.NewClient(context.Background(), &genai.ClientConfig{
-		APIKey:  gemini.apiKey,
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
-
 	if err != nil {
 		return nil, err
 	}
 
-	gemini.client = client
+	gemini := &gemini{
+		client:       client,
+		systemPrompt: systemPrompt,
+		history:      []*genai.Content{},
+		errDomain:    "llm error :",
+	}
 
 	return gemini, nil
 }
 
 func (g *gemini) getConf() *genai.GenerateContentConfig {
-	return &genai.GenerateContentConfig{}
+
+	sysPrompt := genai.NewContentFromText(g.systemPrompt, genai.RoleUser)
+
+	return &genai.GenerateContentConfig{
+		SystemInstruction: sysPrompt,
+		Temperature:       ptr(gemMaxTemperature),
+		MaxOutputTokens:   gemMaxTokens,
+		ResponseMIMEType:  gemResponseMIMEType,
+		ResponseSchema:    gemResponseSchema,
+		Tools:             []*genai.Tool{gemTools},
+	}
 }
 
 func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
@@ -417,6 +367,7 @@ func (g *gemini) getLLMMessage(resp *genai.GenerateContentResponse) *llmMessage 
 	return &msg
 }
 
+// gemini API error statuses
 const (
 	gemInvalidArgument    = "INVALID_ARGUMENT"
 	gemFailedPrecondition = "FAILED_PRECONDITION"
@@ -437,12 +388,15 @@ func (g *gemini) handleError(err error) *agentErr {
 		switch apiErr.Status {
 		// Fatal
 		case gemPermissionDenied, gemFailedPrecondition, gemInvalidArgument, gemNotFound:
-			err = fmt.Errorf("%s %s", g.errPrefix, err.Error())
+			err = fmt.Errorf("%s %s", g.errDomain, err.Error())
 			return newAgentError(agentErrFatal, err)
 		// retry
 		case gemResourceExhausted, gemInternalServerErr, gemUnavailable, gemDeadlineExceeded:
-			err = fmt.Errorf("%s %s", g.errPrefix, err.Error())
+			err = fmt.Errorf("%s %s", g.errDomain, err.Error())
 			return newAgentError(agentErrLlmRetry, err)
+		default:
+			err = fmt.Errorf("%s unhandled API error status: %s", g.errDomain, err.Error())
+			return newAgentError(agentErrTerminate, err)
 		}
 	}
 
@@ -460,7 +414,7 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.Ge
 
 	for i := range MaxRetry {
 
-		resp, err = g.client.Models.GenerateContent(ctx, g.model, contents, g.getConf())
+		resp, err = g.client.Models.GenerateContent(ctx, gemModel, contents, g.getConf())
 
 		if err == nil {
 			break
@@ -483,6 +437,10 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.Ge
 	return resp, nil
 }
 
+const (
+	gemFinishReasonStop = "STOP"
+)
+
 func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *agentErr) {
 
 	var contents []*genai.Content
@@ -495,7 +453,6 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 
 	resp, agentErr := g.call(ctx, contents)
 
-	// TODO: handle finish reason
 	if agentErr != nil {
 		if agentErr.kind == agentErrLlmRetry {
 			return nil, newAgentError(agentErrTerminate, agentErr.err)
@@ -505,9 +462,16 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 
 	g.history = contents
 
-	if len(resp.Candidates) > 0 {
-		g.history = append(g.history, resp.Candidates[0].Content)
+	if len(resp.Candidates) == 0 {
+		return nil, newAgentError(agentErrTerminate, fmt.Errorf("%s no response candidates returned", g.errDomain))
 	}
+
+	if len(resp.Candidates[0].FinishReason) != 0 && resp.Candidates[0].FinishReason != gemFinishReasonStop {
+		finishReason := resp.Candidates[0].FinishReason
+		return nil, newAgentError(agentErrTerminate, fmt.Errorf("%s %s", g.errDomain, finishReason))
+	}
+
+	g.history = append(g.history, resp.Candidates[0].Content)
 
 	return g.getLLMMessage(resp), nil
 }

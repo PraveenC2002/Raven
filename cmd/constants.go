@@ -50,7 +50,7 @@ const (
 	diagnosing               sessionStatus = "diagnosing"
 )
 
-// Diagnoser
+// remoteSSH
 const (
 	sshClientTimeout = 5 * time.Second
 )
