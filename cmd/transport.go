@@ -12,42 +12,37 @@ import (
 	"time"
 )
 
-type transportConf struct {
+type tgTransportConf struct {
 	userId   tgInt
 	addr     string
 	botToken string
 }
 
-type pollErr struct {
-	kind   pollErrKind
-	err    error
-	chatId tgInt
+type tgTransport struct {
+
+	messageCh      chan *tgMessage
+	callBackCh     chan *tgCallBackQuery
+	tranportErrCh  chan *transportErr
+
+	*tgTransportConf
+	client        *http.Client
+	offset        tgInt
+	commandsMap   map[string]struct{}
+	errDomain     string
 }
 
-type transport struct {
-	*transportConf
-
-	client      *http.Client
-	offset      tgInt
-	commandsMap map[string]struct{}
-	messageCh   chan *tgMessage
-	callBackCh  chan *tgCallBackQuery
-	pollErr     chan *pollErr
-	errDomain   string
-}
-
-func newTransport(conf *transportConf) *transport {
+func newTransport(conf *tgTransportConf) *tgTransport {
 
 	cmdMap := map[string]struct{}{
 		cmdDiagnose: {},
 	}
-	t := &transport{
+	t := &tgTransport{
 		client: &http.Client{
 			Timeout: clientTimeout,
 		},
 		offset:        0,
 		commandsMap:   cmdMap,
-		transportConf: conf,
+		tgTransportConf: conf,
 		messageCh:     make(chan *tgMessage, 10),
 		callBackCh:    make(chan *tgCallBackQuery, 10),
 		pollErr:       make(chan *pollErr, 10),
@@ -57,7 +52,7 @@ func newTransport(conf *transportConf) *transport {
 	return t
 }
 
-func (t *transport) authenticate(userId tgInt) error {
+func (t *tgTransport) authenticate(userId tgInt) error {
 	if userId != t.userId {
 		return fmt.Errorf("%s authentication failed", t.errDomain)
 	}
@@ -65,7 +60,7 @@ func (t *transport) authenticate(userId tgInt) error {
 	return nil
 }
 
-func (t *transport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) {
+func (t *tgTransport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) {
 
 	pollErr := &pollErr{
 		kind: kind,
@@ -79,7 +74,7 @@ func (t *transport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) {
 	t.pollErr <- pollErr
 }
 
-func (t *transport) poll(ctx context.Context) {
+func (t *tgTransport) poll(ctx context.Context) {
 
 	defer close(t.messageCh)
 	defer close(t.callBackCh)
@@ -175,7 +170,7 @@ func (t *transport) poll(ctx context.Context) {
 					}
 
 					if _, ok := t.commandsMap[msg.Text[0:entity.Length]]; !ok {
-						err = fmt.Errorf("%s command : %s not supported, please use a valid command", t.errDomain,  msg.Text[0:entity.Length])
+						err = fmt.Errorf("%s command : %s not supported, please use a valid command", t.errDomain, msg.Text[0:entity.Length])
 						t.pushPollErr(pollClientErr, err, msg.From.Id)
 						continue
 					}
@@ -208,7 +203,7 @@ func (t *transport) poll(ctx context.Context) {
 	}
 }
 
-func (t *transport) newThread(ctx context.Context, chatId tgInt, name string) (*tgInt, error) {
+func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) (*tgInt, error) {
 
 	payload, err := json.Marshal(&struct {
 		ChatId tgInt  `json:"chat_id"`
@@ -243,7 +238,7 @@ func (t *transport) newThread(ctx context.Context, chatId tgInt, name string) (*
 	}
 
 	type response struct {
-		*tgCommonResponse
+		*tgBaseResponse
 		Result struct {
 			MessageThreadId tgInt `json:"message_thread_id"`
 		} `json:"result"`
@@ -265,7 +260,7 @@ func (t *transport) newThread(ctx context.Context, chatId tgInt, name string) (*
 	return &threadId, nil
 }
 
-func (t *transport) send(ctx context.Context, msg any, endPoint string) (*tgSendMessageResponse, error) {
+func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSendMessageResponse, error) {
 
 	payload, err := json.Marshal(msg)
 
@@ -306,14 +301,14 @@ func (t *transport) send(ctx context.Context, msg any, endPoint string) (*tgSend
 	return &response, nil
 }
 
-func (t *transport) messages() <-chan *tgMessage {
+func (t *tgTransport) messages() <-chan *tgMessage {
 	return t.messageCh
 }
 
-func (t *transport) callBacks() <-chan *tgCallBackQuery {
+func (t *tgTransport) callBacks() <-chan *tgCallBackQuery {
 	return t.callBackCh
 }
 
-func (t *transport) errors() <-chan *pollErr {
+func (t *tgTransport) errors() <-chan *pollErr {
 	return t.pollErr
 }

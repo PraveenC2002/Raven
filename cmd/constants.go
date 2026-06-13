@@ -2,6 +2,7 @@ package main
 
 import "time"
 
+// general
 const noOp = "no op"
 
 // networking
@@ -14,12 +15,18 @@ const (
 
 // Transport
 
-type pollErrKind int
+type transportErr struct {
+	kind   transportErrKind
+	err    error
+	chatId tgInt
+}
+
+type transportErrKind int
 
 const (
-	pollFatalErr pollErrKind = iota
-	pollLogErr
-	pollClientErr
+	transportErrFatal transportErrKind = iota
+	transportErrLog
+	transportErrClient
 )
 
 const (
@@ -37,6 +44,7 @@ const (
 )
 
 // orchestrator
+
 const (
 	pruneInterval = 5 * time.Second
 	sessionExpiry = 5 * 60 * time.Second

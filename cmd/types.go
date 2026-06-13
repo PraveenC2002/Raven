@@ -7,18 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
+// telegram types
 type tgInt int64
 
-type request struct {
-	messageId   tgInt
-	updateId    tgInt
-	chatId      tgInt
-	userId      tgInt
-	machineName string
-	query       string
-}
-
-type tgCommonResponse struct {
+type tgBaseResponse struct {
 	Ok          bool   `json:"ok"`
 	ErrorCode   int    `json:"error_code"`
 	Description string `json:"description"`
@@ -62,12 +54,12 @@ type tgUpdate struct {
 }
 
 type tgGetUpdateResponse struct {
-	*tgCommonResponse
+	*tgBaseResponse
 	Result []*tgUpdate `json:"result"`
 }
 
 type tgSendMessageResponse struct {
-	*tgCommonResponse
+	*tgBaseResponse
 	Result *tgMessage `json:"result"`
 }
 
@@ -95,14 +87,7 @@ type tgEditMessageText[T any] struct {
 	ReplyMarkup T      `json:"reply_markup,omitempty"`
 }
 
-type machine struct {
-	Id          uuid.UUID `db:"id"`
-	Name        string    `db:"name"`
-	Description string    `db:"description"`
-	CreatedAt   time.Time `db:"created_at"`
-	*connectionInfo
-}
-
+// machine types
 type connectionInfo struct {
 	Host    string `db:"host"`
 	Port    int    `db:"port"`
@@ -111,16 +96,22 @@ type connectionInfo struct {
 	HostKey string `db:"host_key"`
 }
 
+type machine struct {
+	Id          uuid.UUID `db:"id"`
+	Name        string    `db:"name"`
+	Description string    `db:"description"`
+	CreatedAt   time.Time `db:"created_at"`
+	*connectionInfo
+}
+
+
+// ssh types
 type sshOutput struct {
 	Output   string `db:"output"`
 	ExitCode int    `db:"exit_code"`
 }
 
-type owner struct {
-	Id      int   `db:"id"`
-	OwnerId tgInt `db:"owner_id"`
-}
-
+// shell types
 type shellFlag struct {
 	Name         string `toml:"name"`
 	TakesVal     bool   `toml:"takesVal"`
@@ -160,12 +151,13 @@ type shellPolicy struct {
 	DenyList    *shellDenyList `toml:"DenyList"`
 }
 
-type role string
+// llm types
+type llmRole string
 
 const (
-	roleUser  = "user"
-	roleModel = "model"
-	roleTool  = "tool"
+	roleUser  llmRole = "user"
+	roleModel llmRole = "model"
+	roleTool  llmRole = "tool"
 )
 
 type llmFunctionCall struct {
@@ -187,11 +179,23 @@ type llmPart struct {
 }
 
 type llmMessage struct {
-	Role  role
+	Role  llmRole
 	Text  string
 	Parts []*llmPart
 }
 
+type llmResponseErrors struct {
+	textUnmarshalErr string
+}
+
+type llmResponse struct {
+	FinalResponse any
+	clientErrors  *llmResponseErrors
+}
+
+type somethingElse struct {}
+
+// tool types
 type remoteSSHFunctionCall struct {
 	Command string `json:"command"`
 
@@ -209,6 +213,29 @@ type remoteSSHFunctionCall struct {
 	Update string `json:"update"`
 }
 
+// diagnosis output types
+type toolCall struct {
+	Name          string `json:"name"`
+	Action        string `json:"action"` //TODO: handle action filling.... the actual tool action that gets executed
+	OutputSummary string `json:"output_summary"`
+	Reasoning     string `json:"reasoning"`
+	Observation   string `json:"observation"`
+}
+
+type investigationStep struct {
+	StepNumber int            `json:"step_number"`
+	ToolCalls  []*toolCall `json:"tool_calls"`
+}
+
+type investigationHistory struct {
+	MachineInfo *struct {
+		Name        string
+		Description string
+	} `json:"machineInfo"`
+	Query string               `json:"query"`
+	Steps []*investigationStep `json:"steps"`
+}
+
 type diagnosisReport struct {
 	Summary   string `json:"summary"`
 	RootCause string `json:"root_cause"`
@@ -221,38 +248,13 @@ type diagnosisReport struct {
 	ConfidenceReason string                `json:"confidence_reason"`
 }
 
-type llmToolCall struct {
-	Name          string `json:"name"`
-	Action        string `json:"action"`
-	OutputSummary string `json:"output_summary"`
-	Reasoning     string `json:"reasoning"`
-	Observation   string `json:"observation"`
-}
-
-type investigationStep struct {
-	StepNumber int            `json:"step_number"`
-	ToolCalls  []*llmToolCall `json:"tool_calls"`
-}
-
-type investigationHistory struct {
-	MachineInfo *struct {
-		Name        string
-		Description string
-	} `json:"machineInfo"`
-	Query string               `json:"query"`
-	Steps []*investigationStep `json:"steps"`
-}
-
-type llmResponseErrors struct {
-	textUnmarshalErr string
-}
-
-type llmResponse struct {
-	FinalResponse *agentResult
-	clientErrors  *llmResponseErrors
-}
-
-type agentResult struct {
+type diagnosisResult struct {
 	Report  *diagnosisReport      `json:"investigation_report"`
 	History *investigationHistory `json:"investigation_history"`
+}
+
+// DB types
+type owner struct {
+	Id      int   `db:"id"`
+	OwnerId tgInt `db:"owner_id"`
 }

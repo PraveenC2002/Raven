@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+type tgSessionKey struct {
+	chatId   tgInt
+	threadId tgInt
+}
+
 type sessionConf struct {
 	registry        Registry
 	transport       Transport

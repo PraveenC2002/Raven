@@ -185,7 +185,7 @@ func (a *agent) systemPrompt() (string, error) {
 	return buf.String(), nil
 }
 
-func (a *agent) run(ctx context.Context) (*agentResult, *agentErr) {
+func (a *agent) run(ctx context.Context) (any, *agentErr) {
 
 	// can panic if routine tries to send after closing, currently not a problem because everything is synchronous
 	// if in future operations becomes asynchronous handle this
@@ -332,7 +332,7 @@ func (a *agent) executeFunctionCalls(ctx context.Context, FCs []*llmFunctionCall
 }
 
 // TODO: Add max iteration bound
-func (a *agent) loop(ctx context.Context) (*agentResult, *agentErr) {
+func (a *agent) loop(ctx context.Context) (any, *agentErr) {
 
 	msg, err := a.initialPrompt(ctx)
 	if err != nil {

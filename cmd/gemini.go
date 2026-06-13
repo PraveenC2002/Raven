@@ -235,10 +235,15 @@ var gemResponseSchema = &genai.Schema{
 		"final_response": {
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
-				"investigation_report":  gemReportSchema,
-				"investigation_history": gemInvestigationHistorySchema,
+				"diagnosis_result": {
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"investigation_report":  gemReportSchema,
+						"investigation_history": gemInvestigationHistorySchema,
+					},
+					Required: []string{"investigation_report", "investigation_history"},
+				},
 			},
-			Required: []string{"investigation_report", "investigation_history"},
 		},
 	},
 }
@@ -296,7 +301,7 @@ func (g *gemini) getConf() *genai.GenerateContentConfig {
 func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
 
 	content := &genai.Content{
-		Role: roleUser,
+		Role: string(roleUser),
 	}
 
 	var geminiParts []*genai.Part
@@ -338,7 +343,7 @@ func (g *gemini) getLLMMessage(resp *genai.GenerateContentResponse) *llmMessage 
 
 	if len(resp.Candidates) > 0 {
 
-		msg.Role = role(resp.Candidates[0].Content.Role)
+		msg.Role = llmRole(resp.Candidates[0].Content.Role)
 		if len(resp.Text()) != 0 {
 			part := llmPart{
 				Text: resp.Text(),

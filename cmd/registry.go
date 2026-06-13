@@ -65,7 +65,6 @@ func (r *registry) getUser() (*tgInt, error) {
 	return &ownerId, nil 
 }
 
-
 func (r *registry) addVm(m *machine) error {
 
 	m.Id = uuid.New()
