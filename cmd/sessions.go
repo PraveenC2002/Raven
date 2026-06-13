@@ -115,7 +115,7 @@ func (s *session) cbMachineSelection(cb *tgCallBackQuery) error {
 	return nil
 }
 
-func (s *session) handleDiagnoseMachineUpdates(updCh <-chan string) {
+func (s *session) handleDiagnoseMachineUpdates(a *agent) {
 
 	for {
 		// stubbed

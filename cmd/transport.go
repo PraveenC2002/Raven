@@ -16,7 +16,6 @@ type transportConf struct {
 	userId   tgInt
 	addr     string
 	botToken string
-	ctx      context.Context
 }
 
 type pollErr struct {
@@ -34,6 +33,7 @@ type transport struct {
 	messageCh   chan *tgMessage
 	callBackCh  chan *tgCallBackQuery
 	pollErr     chan *pollErr
+	errDomain   string
 }
 
 func newTransport(conf *transportConf) *transport {
@@ -51,6 +51,7 @@ func newTransport(conf *transportConf) *transport {
 		messageCh:     make(chan *tgMessage, 10),
 		callBackCh:    make(chan *tgCallBackQuery, 10),
 		pollErr:       make(chan *pollErr, 10),
+		errDomain:     "telegram transport error :",
 	}
 
 	return t
@@ -58,7 +59,7 @@ func newTransport(conf *transportConf) *transport {
 
 func (t *transport) authenticate(userId tgInt) error {
 	if userId != t.userId {
-		return fmt.Errorf("authentication failed")
+		return fmt.Errorf("%s authentication failed", t.errDomain)
 	}
 
 	return nil
@@ -78,7 +79,7 @@ func (t *transport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) {
 	t.pollErr <- pollErr
 }
 
-func (t *transport) poll() {
+func (t *transport) poll(ctx context.Context) {
 
 	defer close(t.messageCh)
 	defer close(t.callBackCh)
@@ -93,8 +94,9 @@ func (t *transport) poll() {
 		params.Set("allowed_updates", `["message", "callback_query"]`)
 
 		reqUrl := t.addr + t.botToken + "/" + endpointGetUpdate + "?" + params.Encode()
-		req, err := http.NewRequestWithContext(t.ctx, http.MethodGet, reqUrl, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 		if err != nil {
+			err = fmt.Errorf("%s %s", t.errDomain, err.Error())
 			t.pushPollErr(pollFatalErr, err)
 			return
 		}
@@ -102,11 +104,13 @@ func (t *transport) poll() {
 		res, err := t.client.Do(req)
 		if err != nil {
 
-			if t.ctx.Err() != nil {
-				t.pushPollErr(pollFatalErr, t.ctx.Err())
+			if ctx.Err() != nil {
+				err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
+				t.pushPollErr(pollFatalErr, err)
 				return
 			} else {
-				t.pushPollErr(pollLogErr, fmt.Errorf("poll error : %s\n", err.Error()))
+				err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
+				t.pushPollErr(pollLogErr, err)
 				time.Sleep(pollRetryBackoff)
 				continue
 			}
@@ -114,7 +118,8 @@ func (t *transport) poll() {
 
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			t.pushPollErr(pollLogErr, fmt.Errorf("poll error : %s\n", err.Error()))
+			err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
+			t.pushPollErr(pollLogErr, err)
 			res.Body.Close()
 			continue
 		}
@@ -122,14 +127,15 @@ func (t *transport) poll() {
 		var resp tgGetUpdateResponse
 		err = json.Unmarshal(body, &resp)
 		if err != nil {
-			t.pushPollErr(pollLogErr, fmt.Errorf("poll error : %s\n", err.Error()))
+			err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
+			t.pushPollErr(pollLogErr, err)
 			res.Body.Close()
 			continue
 		}
 		res.Body.Close()
 
 		if !resp.Ok {
-			err = fmt.Errorf("poll error,  code : %d \n message : %s\n", resp.ErrorCode, resp.Description)
+			err = fmt.Errorf("%s poll error, response code : %d \n message : %s\n", t.errDomain, resp.ErrorCode, resp.Description)
 			t.pushPollErr(pollLogErr, err)
 			time.Sleep(pollRetryBackoff)
 			continue
@@ -150,34 +156,35 @@ func (t *transport) poll() {
 					}
 
 					if len(msg.Entities) != 1 {
-						err = fmt.Errorf("please use ONE of supported raven commands")
+						err = fmt.Errorf("%s please use ONE of supported raven commands", t.errDomain)
 						t.pushPollErr(pollClientErr, err, msg.From.Id)
 						continue
 					}
 
 					entity := msg.Entities[0]
 					if entity.Type != cmd {
-						err = fmt.Errorf("please use raven commands")
+						err = fmt.Errorf("%s please use raven commands", t.errDomain)
 						t.pushPollErr(pollClientErr, err, msg.From.Id)
 						continue
 					}
 
 					if entity.Offset != 0 {
-						err = fmt.Errorf("please use command format : /command <arg>")
+						err = fmt.Errorf("%s please use command format : /command <arg>", t.errDomain)
 						t.pushPollErr(pollClientErr, err, msg.From.Id)
 						continue
 					}
 
 					if _, ok := t.commandsMap[msg.Text[0:entity.Length]]; !ok {
-						err = fmt.Errorf("command : %s not supported, please use a valid command", msg.Text[0:entity.Length])
+						err = fmt.Errorf("%s command : %s not supported, please use a valid command", t.errDomain,  msg.Text[0:entity.Length])
 						t.pushPollErr(pollClientErr, err, msg.From.Id)
 						continue
 					}
 
 					select {
 					case t.messageCh <- msg:
-					case <-t.ctx.Done():
-						t.pushPollErr(pollFatalErr, t.ctx.Err())
+					case <-ctx.Done():
+						err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
+						t.pushPollErr(pollFatalErr, err)
 						return
 					}
 				case upd.CallBackQuery != nil:
@@ -190,8 +197,9 @@ func (t *transport) poll() {
 
 					select {
 					case t.callBackCh <- cb:
-					case <-t.ctx.Done():
-						t.pushPollErr(pollFatalErr, t.ctx.Err())
+					case <-ctx.Done():
+						err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
+						t.pushPollErr(pollFatalErr, err)
 						return
 					}
 				}
@@ -200,7 +208,7 @@ func (t *transport) poll() {
 	}
 }
 
-func (t *transport) newThread(chatId tgInt, name string) (*tgInt, error) {
+func (t *transport) newThread(ctx context.Context, chatId tgInt, name string) (*tgInt, error) {
 
 	payload, err := json.Marshal(&struct {
 		ChatId tgInt  `json:"chat_id"`
@@ -217,7 +225,7 @@ func (t *transport) newThread(chatId tgInt, name string) (*tgInt, error) {
 	body := bytes.NewReader(payload)
 
 	reqUrl := t.addr + t.botToken + "/" + endpointCreateThread
-	req, err := http.NewRequestWithContext(t.ctx, "POST", reqUrl, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqUrl, body)
 	if err != nil {
 		return nil, err
 	}
@@ -257,10 +265,10 @@ func (t *transport) newThread(chatId tgInt, name string) (*tgInt, error) {
 	return &threadId, nil
 }
 
-func (t *transport) send(msg any, endPoint string) (*tgSendMessageResponse, error) {
-	
+func (t *transport) send(ctx context.Context, msg any, endPoint string) (*tgSendMessageResponse, error) {
+
 	payload, err := json.Marshal(msg)
-	
+
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +276,7 @@ func (t *transport) send(msg any, endPoint string) (*tgSendMessageResponse, erro
 	body := bytes.NewReader(payload)
 
 	reqURL := t.addr + t.botToken + "/" + endPoint
-	req, err := http.NewRequestWithContext(t.ctx, "POST", reqURL, body)
+	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, body)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +314,6 @@ func (t *transport) callBacks() <-chan *tgCallBackQuery {
 	return t.callBackCh
 }
 
-func (t *transport) errors() <- chan *pollErr {
+func (t *transport) errors() <-chan *pollErr {
 	return t.pollErr
 }
