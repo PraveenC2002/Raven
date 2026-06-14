@@ -10,11 +10,7 @@ import (
 // telegram types
 type tgInt int64
 
-type tgBaseResponse struct {
-	Ok          bool   `json:"ok"`
-	ErrorCode   int    `json:"error_code"`
-	Description string `json:"description"`
-}
+// ----------------- Receive types --------------------------
 
 type tgUser struct {
 	Id tgInt `json:"id"`
@@ -58,10 +54,7 @@ type tgGetUpdateResponse struct {
 	Result []*tgUpdate `json:"result"`
 }
 
-type tgSendMessageResponse struct {
-	*tgBaseResponse
-	Result *tgMessage `json:"result"`
-}
+// --------------- Send types ----------------------------
 
 type tgInlineKeyboardButton struct {
 	Text         string `json:"text"`
@@ -85,6 +78,19 @@ type tgEditMessageText[T any] struct {
 	MessageId   tgInt  `json:"message_id,omitempty"`
 	Text        string `json:"text"`
 	ReplyMarkup T      `json:"reply_markup,omitempty"`
+}
+
+type tgSendMessageResponse struct {
+	*tgBaseResponse
+	Result *tgMessage `json:"result"`
+}
+
+// ----------------- Base API interaction type --------------------------
+
+type tgBaseResponse struct {
+	Ok          bool   `json:"ok"`
+	ErrorCode   int    `json:"error_code"`
+	Description string `json:"description"`
 }
 
 // machine types

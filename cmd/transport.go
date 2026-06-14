@@ -9,44 +9,52 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
 
+type tgSessionKey struct {
+	chatId   tgInt
+	threadId tgInt
+}
+
 type tgTransportConf struct {
-	userId   tgInt
-	addr     string
-	botToken string
+	userId         tgInt
+	addr           string
+	botToken       string
+	vmLockProvider *vmLockProvider
 }
 
 type tgTransport struct {
-
-	messageCh      chan *tgMessage
-	callBackCh     chan *tgCallBackQuery
-	tranportErrCh  chan *transportErr
-
 	*tgTransportConf
-	client        *http.Client
-	offset        tgInt
-	commandsMap   map[string]struct{}
-	errDomain     string
+
+	client *http.Client
+	offset tgInt
+
+	sessionMapLock *sync.Mutex
+	sessionMap     map[tgSessionKey]*tgSession
+
+	messageCh     chan *tgMessage
+	callBackCh    chan *tgCallBackQuery
+	tranportErrCh chan *transportErr
 }
 
 func newTransport(conf *tgTransportConf) *tgTransport {
 
-	cmdMap := map[string]struct{}{
-		cmdDiagnose: {},
-	}
 	t := &tgTransport{
+
+		tgTransportConf: conf,
 		client: &http.Client{
 			Timeout: clientTimeout,
 		},
-		offset:        0,
-		commandsMap:   cmdMap,
-		tgTransportConf: conf,
-		messageCh:     make(chan *tgMessage, 10),
-		callBackCh:    make(chan *tgCallBackQuery, 10),
-		pollErr:       make(chan *pollErr, 10),
-		errDomain:     "telegram transport error :",
+		offset: 0,
+
+		sessionMapLock: &sync.Mutex{},
+		sessionMap:     make(map[tgSessionKey]*tgSession),
+
+		messageCh:     make(chan *tgMessage, 20),
+		callBackCh:    make(chan *tgCallBackQuery, 20),
+		tranportErrCh: make(chan *transportErr, 20),
 	}
 
 	return t
@@ -54,15 +62,15 @@ func newTransport(conf *tgTransportConf) *tgTransport {
 
 func (t *tgTransport) authenticate(userId tgInt) error {
 	if userId != t.userId {
-		return fmt.Errorf("%s authentication failed", t.errDomain)
+		return fmt.Errorf("%s authentication failed")
 	}
 
 	return nil
 }
 
-func (t *tgTransport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) {
+func (t *tgTransport) pushTransportErr(kind transportErrKind, err error, chatId ...tgInt) {
 
-	pollErr := &pollErr{
+	pollErr := &transportErr{
 		kind: kind,
 		err:  err,
 	}
@@ -71,14 +79,14 @@ func (t *tgTransport) pushPollErr(kind pollErrKind, err error, chatId ...tgInt) 
 		pollErr.chatId = chatId[0]
 	}
 
-	t.pollErr <- pollErr
+	t.tranportErrCh <- pollErr
 }
 
 func (t *tgTransport) poll(ctx context.Context) {
 
 	defer close(t.messageCh)
 	defer close(t.callBackCh)
-	defer close(t.pollErr)
+	defer close(t.tranportErrCh)
 
 	for {
 
@@ -91,8 +99,8 @@ func (t *tgTransport) poll(ctx context.Context) {
 		reqUrl := t.addr + t.botToken + "/" + endpointGetUpdate + "?" + params.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 		if err != nil {
-			err = fmt.Errorf("%s %s", t.errDomain, err.Error())
-			t.pushPollErr(pollFatalErr, err)
+			err = fmt.Errorf("%s %s", err.Error())
+			t.pushTransportErr(transportErrFatal, err)
 			return
 		}
 
@@ -100,12 +108,12 @@ func (t *tgTransport) poll(ctx context.Context) {
 		if err != nil {
 
 			if ctx.Err() != nil {
-				err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
-				t.pushPollErr(pollFatalErr, err)
+				err = fmt.Errorf("%s %s", ctx.Err().Error())
+				t.pushTransportErr(transportErrFatal, err)
 				return
 			} else {
-				err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
-				t.pushPollErr(pollLogErr, err)
+				err = fmt.Errorf("%s poll error : %s", err.Error())
+				t.pushTransportErr(transportErrLog, err)
 				time.Sleep(pollRetryBackoff)
 				continue
 			}
@@ -113,8 +121,8 @@ func (t *tgTransport) poll(ctx context.Context) {
 
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
-			t.pushPollErr(pollLogErr, err)
+			err = fmt.Errorf("%s poll error : %s", err.Error())
+			t.pushTransportErr(transportErrLog, err)
 			res.Body.Close()
 			continue
 		}
@@ -122,16 +130,16 @@ func (t *tgTransport) poll(ctx context.Context) {
 		var resp tgGetUpdateResponse
 		err = json.Unmarshal(body, &resp)
 		if err != nil {
-			err = fmt.Errorf("%s poll error : %s", t.errDomain, err.Error())
-			t.pushPollErr(pollLogErr, err)
+			err = fmt.Errorf("%s poll error : %s", err.Error())
+			t.pushTransportErr(transportErrLog, err)
 			res.Body.Close()
 			continue
 		}
 		res.Body.Close()
 
 		if !resp.Ok {
-			err = fmt.Errorf("%s poll error, response code : %d \n message : %s\n", t.errDomain, resp.ErrorCode, resp.Description)
-			t.pushPollErr(pollLogErr, err)
+			err = fmt.Errorf("%s poll error, response code : %d \n message : %s\n", resp.ErrorCode, resp.Description)
+			t.pushTransportErr(transportErrLog, err)
 			time.Sleep(pollRetryBackoff)
 			continue
 		}
@@ -143,6 +151,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 			for _, upd := range resp.Result {
 
 				switch {
+
 				case upd.Message != nil:
 
 					msg := upd.Message
@@ -150,38 +159,16 @@ func (t *tgTransport) poll(ctx context.Context) {
 						continue
 					}
 
-					if len(msg.Entities) != 1 {
-						err = fmt.Errorf("%s please use ONE of supported raven commands", t.errDomain)
-						t.pushPollErr(pollClientErr, err, msg.From.Id)
-						continue
-					}
-
-					entity := msg.Entities[0]
-					if entity.Type != cmd {
-						err = fmt.Errorf("%s please use raven commands", t.errDomain)
-						t.pushPollErr(pollClientErr, err, msg.From.Id)
-						continue
-					}
-
-					if entity.Offset != 0 {
-						err = fmt.Errorf("%s please use command format : /command <arg>", t.errDomain)
-						t.pushPollErr(pollClientErr, err, msg.From.Id)
-						continue
-					}
-
-					if _, ok := t.commandsMap[msg.Text[0:entity.Length]]; !ok {
-						err = fmt.Errorf("%s command : %s not supported, please use a valid command", t.errDomain, msg.Text[0:entity.Length])
-						t.pushPollErr(pollClientErr, err, msg.From.Id)
-						continue
-					}
-
 					select {
+
 					case t.messageCh <- msg:
+
 					case <-ctx.Done():
-						err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
-						t.pushPollErr(pollFatalErr, err)
+						err = fmt.Errorf("%s %s", ctx.Err().Error())
+						t.pushTransportErr(transportErrFatal, err)
 						return
 					}
+
 				case upd.CallBackQuery != nil:
 
 					cb := upd.CallBackQuery
@@ -191,10 +178,12 @@ func (t *tgTransport) poll(ctx context.Context) {
 					}
 
 					select {
+
 					case t.callBackCh <- cb:
+
 					case <-ctx.Done():
-						err = fmt.Errorf("%s %s", t.errDomain, ctx.Err().Error())
-						t.pushPollErr(pollFatalErr, err)
+						err = fmt.Errorf("%s %s", ctx.Err().Error())
+						t.pushTransportErr(transportErrFatal, err)
 						return
 					}
 				}
@@ -262,6 +251,7 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 
 func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSendMessageResponse, error) {
 
+	// maybe add a switch case guard on msg type to enforce right type on right endpoint
 	payload, err := json.Marshal(msg)
 
 	if err != nil {
@@ -301,14 +291,94 @@ func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSe
 	return &response, nil
 }
 
-func (t *tgTransport) messages() <-chan *tgMessage {
-	return t.messageCh
+func (t *tgTransport) start(ctx context.Context) {
+
+	go t.poll(ctx)
+	go t.pruneSession(ctx)
+
+	for {
+
+		select {
+		case msg, ok := <-t.messageCh:
+			if !ok { break }
+			go t.handleMessage(ctx, msg)
+		case cb, ok := <-t.callBackCh:
+			if !ok { break }
+			go t.handleCallback(ctx, cb)
+		case err, ok := <-t.tranportErrCh:
+			if !ok { break }
+			go t.handleTransportError(err)
+		case <- ctx.Done(): 
+		}
+	}
 }
 
-func (t *tgTransport) callBacks() <-chan *tgCallBackQuery {
-	return t.callBackCh
+func (t *tgTransport) handleMessage(ctx context.Context, msg *tgMessage) error {
+
+	t.sessionMapLock.Lock()
+	defer t.sessionMapLock.Unlock()
+	
+	if oldSess, ok := t.sessionMap[tgSessionKey{chatId: msg.Chat.Id, threadId: msg.MessageThreadId}]; ok {
+		return oldSess.msgRouter(ctx, msg)
+	}
+	
+	onThreadCreated := func(chatId, threadId tgInt) {
+		t.sessionMapLock.Lock()
+		defer t.sessionMapLock.Unlock()
+
+		oldKey := tgSessionKey{
+			chatId:   chatId,
+			threadId: 0,
+		}
+		session := t.sessionMap[oldKey]
+		delete(t.sessionMap, oldKey)
+
+		newKey := tgSessionKey{
+			chatId:   chatId,
+			threadId: threadId,
+		}
+
+		t.sessionMap[newKey] = session
+	}
+
+	conf := &tgSessionConf{
+		transport:       t,
+		onThreadCreated: onThreadCreated,
+	}
+
+	session := newSession(msg.Chat.Id, conf)
+
+	sessionKey := tgSessionKey{
+		chatId:   session.chatId,
+		threadId: 0,
+	}
+	t.sessionMap[sessionKey] = session
+
+	return session.msgRouter(ctx, msg)
 }
 
-func (t *tgTransport) errors() <-chan *pollErr {
-	return t.pollErr
+func (t *tgTransport) handleCallback(ctx context.Context, cb *tgCallBackQuery) error {
+
+	key := tgSessionKey{
+		chatId:   cb.Message.Chat.Id,
+		threadId: cb.Message.MessageThreadId,
+	}
+
+	t.sessionMapLock.Lock()
+	sess, ok := t.sessionMap[key]
+	t.sessionMapLock.Unlock()
+	if !ok {
+		return fmt.Errorf("%s session for callback not found") // write this error again
+	}
+	return sess.cbRouter(ctx, cb)
 }
+
+func (t *tgTransport) handleTransportError(err *transportErr) {
+
+}
+
+func (t *tgTransport) pruneSession(ctx context.Context) {
+
+}
+
+func (t *tgTransport) close()

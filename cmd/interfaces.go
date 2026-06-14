@@ -5,18 +5,9 @@ import (
 )
 
 type Transport interface {
-	poll()
-	newThread(tgInt, string) (*tgInt, error)
-	messages() <-chan *tgMessage
-	callBacks() <-chan *tgCallBackQuery
-	send(any, string) (*tgSendMessageResponse, error)
-	errors() <-chan *pollErr
-}
-
-type Session interface{}
-
-type Orchestrator interface {
-	run()
+	start(ctx context.Context)
+	close()
+	// errors() <-chan *transportErr
 }
 
 type Agent interface{}

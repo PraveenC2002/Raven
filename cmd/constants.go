@@ -29,13 +29,13 @@ const (
 	transportErrClient
 )
 
+// tg transport
+
 const (
 	pollTimeout                    = 30
 	clientTimeout                  = 35 * time.Second
 	getMethodLimit                 = 1
 	pollRetryBackoff               = 5 * time.Second // TODO: Implement exponential backoff on tg transport
-	cmd                            = "command"
-	cmdDiagnose                    = "diagnose"
 	endpointGetUpdate              = "getUpdate"
 	endpointCreateThread           = "createForumTopic"
 	endpointSendMessage            = "sendMessage"
@@ -43,19 +43,30 @@ const (
 	endpointEditMessageReplyMarkup = "editMessageReplyMarkup"
 )
 
-// orchestrator
-
 const (
 	pruneInterval = 5 * time.Second
 	sessionExpiry = 5 * 60 * time.Second
 )
 
 // Session
-type sessionStatus string
+type tgSessionStatus int
 
 const (
-	awaitingMachineSelection sessionStatus = "awaitingMachineSelection"
-	diagnosing               sessionStatus = "diagnosing"
+	tgSessionInit tgSessionStatus = iota
+	tgSelectMachine
+	tgDiagnoseMachine
+)
+
+type tgEntity string
+
+const (
+	tgEntityCmd tgEntity = "command"
+)
+
+type tgCmd string
+
+const (
+	tgCmdDiagnose tgCmd = "diagnose"
 )
 
 // remoteSSH
