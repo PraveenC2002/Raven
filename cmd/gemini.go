@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"time"
 
 	"google.golang.org/genai"
@@ -91,16 +90,16 @@ var gemReportSchema = &genai.Schema{
 			Items: &genai.Schema{
 				Type: genai.TypeObject,
 				Properties: map[string]*genai.Schema{
-					"command": {
+					"action": {
 						Type:        genai.TypeString,
-						Description: "command which you ran",
+						Description: "action which you performed",
 					},
 					"observation": {
 						Type:        genai.TypeString,
 						Description: "result which you got which is an evidence to your root cause analysis claim",
 					},
 				},
-				Required: []string{"command", "observation"},
+				Required: []string{"action", "observation"},
 			},
 		},
 		"recommendation": {
@@ -119,19 +118,19 @@ var gemReportSchema = &genai.Schema{
 	Required: []string{"summary", "root_cause", "evidence", "recommendation", "confidence_level", "confidence_reason"},
 }
 
-type finalReportConfidence string
+type gemConfidence string
 
 const (
-	finalReportConfidenceHigh   finalReportConfidence = "High"
-	finalReportConfidenceMedium finalReportConfidence = "Medium"
-	finalReportConfidenceLow    finalReportConfidence = "Low"
+	gemConfidenceHigh   gemConfidence = "HIGH"
+	gemConfidenceMedium gemConfidence = "MEDIUM"
+	gemConfidenceLow    gemConfidence = "LOW"
 )
 
 func reportConfidenceEnum() []string {
 	return []string{
-		string(finalReportConfidenceHigh),
-		string(finalReportConfidenceMedium),
-		string(finalReportConfidenceLow),
+		string(gemConfidenceHigh),
+		string(gemConfidenceMedium),
+		string(gemConfidenceLow),
 	}
 }
 
@@ -263,11 +262,10 @@ type gemini struct {
 	errDomain    string
 }
 
-func newGemini(ctx context.Context, systemPrompt string) (*gemini, error) {
+func newGemini(ctx context.Context, systemPrompt string, conf *config) (*gemini, error) {
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
+		APIKey:  conf.geminiAPIKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {

@@ -9,14 +9,13 @@ import (
 )
 
 type config struct {
-	tgURL      string
-	tgToken    string
-	dbPath     string
-	schemaPath string
+	tgURL   string
+	tgToken string
 	geminiAPIKey string
+	tempDir string
 }
 
-func loadConf() (*config, error) {
+func loadConfig() (*config, error) {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -48,26 +47,31 @@ func loadConf() (*config, error) {
 		return nil, fmt.Errorf("no gemini api key provided")
 	}
 
-	conf.dbPath = filepath.Join(ravenPath, "raven.db")
-
+	conf.tempDir, err = os.MkdirTemp("", "raven-*")
+	if err != nil {
+		return nil, err
+	}
+	
 	return conf, nil
 }
 
 func bootstrap() error {
 
-	conf, err := loadConf()
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
 	}
 
-	db, err := openPath(conf.dbPath)
+	dbPath := filepath.Join(homeDir, ".raven", "raven.db")
+	db, err := openDBPath(dbPath)
+
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
 	r := &registry{
-		db : db,
+		db: db,
 	}
 
 	cmd := setupCmd(r)
@@ -76,7 +80,5 @@ func bootstrap() error {
 		return err
 	}
 
-	
-	
 	return nil
 }

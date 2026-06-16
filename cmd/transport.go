@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -37,13 +40,15 @@ type tgTransport struct {
 	messageCh     chan *tgMessage
 	callBackCh    chan *tgCallBackQuery
 	tranportErrCh chan *transportErr
+
+	appConf *config
 }
 
-func newTransport(conf *tgTransportConf) *tgTransport {
+func newTransport(transporConf *tgTransportConf, conf *config) *tgTransport {
 
 	t := &tgTransport{
 
-		tgTransportConf: conf,
+		tgTransportConf: transporConf,
 		client: &http.Client{
 			Timeout: clientTimeout,
 		},
@@ -55,6 +60,8 @@ func newTransport(conf *tgTransportConf) *tgTransport {
 		messageCh:     make(chan *tgMessage, 20),
 		callBackCh:    make(chan *tgCallBackQuery, 20),
 		tranportErrCh: make(chan *transportErr, 20),
+
+		appConf: conf,
 	}
 
 	return t
@@ -62,7 +69,7 @@ func newTransport(conf *tgTransportConf) *tgTransport {
 
 func (t *tgTransport) authenticate(userId tgInt) error {
 	if userId != t.userId {
-		return fmt.Errorf("%s authentication failed")
+		return fmt.Errorf("authentication failed")
 	}
 
 	return nil
@@ -82,6 +89,10 @@ func (t *tgTransport) pushTransportErr(kind transportErrKind, err error, chatId 
 	t.tranportErrCh <- pollErr
 }
 
+func (t *tgTransport) makeUrl(ep tgEndpoint) string {
+	return t.addr + t.botToken + "/" + string(ep)
+}
+
 func (t *tgTransport) poll(ctx context.Context) {
 
 	defer close(t.messageCh)
@@ -96,10 +107,10 @@ func (t *tgTransport) poll(ctx context.Context) {
 		params.Set("limit", strconv.Itoa(getMethodLimit))
 		params.Set("allowed_updates", `["message", "callback_query"]`)
 
-		reqUrl := t.addr + t.botToken + "/" + endpointGetUpdate + "?" + params.Encode()
+		reqUrl :=  t.makeUrl(tgEPGetUpdate) + "?" + params.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 		if err != nil {
-			err = fmt.Errorf("%s %s", err.Error())
+			err = fmt.Errorf("%s", err.Error())
 			t.pushTransportErr(transportErrFatal, err)
 			return
 		}
@@ -108,11 +119,11 @@ func (t *tgTransport) poll(ctx context.Context) {
 		if err != nil {
 
 			if ctx.Err() != nil {
-				err = fmt.Errorf("%s %s", ctx.Err().Error())
+				err = fmt.Errorf("%s", ctx.Err().Error())
 				t.pushTransportErr(transportErrFatal, err)
 				return
 			} else {
-				err = fmt.Errorf("%s poll error : %s", err.Error())
+				err = fmt.Errorf("poll error : %s", err.Error())
 				t.pushTransportErr(transportErrLog, err)
 				time.Sleep(pollRetryBackoff)
 				continue
@@ -121,7 +132,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			err = fmt.Errorf("%s poll error : %s", err.Error())
+			err = fmt.Errorf("poll error : %s", err.Error())
 			t.pushTransportErr(transportErrLog, err)
 			res.Body.Close()
 			continue
@@ -130,7 +141,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 		var resp tgGetUpdateResponse
 		err = json.Unmarshal(body, &resp)
 		if err != nil {
-			err = fmt.Errorf("%s poll error : %s", err.Error())
+			err = fmt.Errorf("poll error : %s", err.Error())
 			t.pushTransportErr(transportErrLog, err)
 			res.Body.Close()
 			continue
@@ -138,7 +149,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 		res.Body.Close()
 
 		if !resp.Ok {
-			err = fmt.Errorf("%s poll error, response code : %d \n message : %s\n", resp.ErrorCode, resp.Description)
+			err = fmt.Errorf("poll error, response code : %d \n message : %s\n", resp.ErrorCode, resp.Description)
 			t.pushTransportErr(transportErrLog, err)
 			time.Sleep(pollRetryBackoff)
 			continue
@@ -164,7 +175,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 					case t.messageCh <- msg:
 
 					case <-ctx.Done():
-						err = fmt.Errorf("%s %s", ctx.Err().Error())
+						err = fmt.Errorf("%s", ctx.Err().Error())
 						t.pushTransportErr(transportErrFatal, err)
 						return
 					}
@@ -182,7 +193,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 					case t.callBackCh <- cb:
 
 					case <-ctx.Done():
-						err = fmt.Errorf("%s %s", ctx.Err().Error())
+						err = fmt.Errorf("%s", ctx.Err().Error())
 						t.pushTransportErr(transportErrFatal, err)
 						return
 					}
@@ -208,7 +219,7 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 
 	body := bytes.NewReader(payload)
 
-	reqUrl := t.addr + t.botToken + "/" + endpointCreateThread
+	reqUrl := t.addr + t.botToken + "/" + string(tgEPCreateThread)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqUrl, body)
 	if err != nil {
 		return nil, err
@@ -249,7 +260,7 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 	return &threadId, nil
 }
 
-func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSendMessageResponse, error) {
+func (t *tgTransport) send(ctx context.Context, msg any, ep tgEndpoint) (*tgSendMessageResponse, error) {
 
 	// maybe add a switch case guard on msg type to enforce right type on right endpoint
 	payload, err := json.Marshal(msg)
@@ -260,7 +271,7 @@ func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSe
 
 	body := bytes.NewReader(payload)
 
-	reqURL := t.addr + t.botToken + "/" + endPoint
+	reqURL := t.addr + t.botToken + "/" + string(ep)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, body)
 	if err != nil {
 		return nil, err
@@ -291,6 +302,60 @@ func (t *tgTransport) send(ctx context.Context, msg any, endPoint string) (*tgSe
 	return &response, nil
 }
 
+func (t *tgTransport) sendDocument(ctx context.Context, doc *tgSendDoc, pdf *os.File) error {
+
+	var body bytes.Buffer
+	
+	writer := multipart.NewWriter(&body)
+
+	writer.WriteField("chat_id", strconv.Itoa(int(doc.ChatId)))
+
+	if len(doc.Caption) != 0 {
+		writer.WriteField("caption", doc.Caption)
+	}
+
+	part, err := writer.CreateFormFile("document", filepath.Base(pdf.Name()))
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(part, pdf)
+	if err != nil {
+		return err
+	}
+
+	err = writer.Close()
+	if err != nil {
+		return err
+	}
+
+	reqUrl := t.makeUrl(tgEPSendDoc) 
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqUrl, &body)
+
+	res, err := t.client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			err = fmt.Errorf("%s", ctx.Err().Error())
+			return err
+		} else {
+			err = fmt.Errorf("poll error : %s", err.Error())
+			return err
+		}
+	}
+	defer res.Body.Close()
+	
+	resbody, err := io.ReadAll(res.Body)
+	if err != nil {
+		err = fmt.Errorf("poll error : %s", err.Error())
+		res.Body.Close()
+	}
+
+
+	
+
+	
+}
+
 func (t *tgTransport) start(ctx context.Context) {
 
 	go t.poll(ctx)
@@ -300,15 +365,21 @@ func (t *tgTransport) start(ctx context.Context) {
 
 		select {
 		case msg, ok := <-t.messageCh:
-			if !ok { break }
+			if !ok {
+				break
+			}
 			go t.handleMessage(ctx, msg)
 		case cb, ok := <-t.callBackCh:
-			if !ok { break }
+			if !ok {
+				break
+			}
 			go t.handleCallback(ctx, cb)
 		case err, ok := <-t.tranportErrCh:
-			if !ok { break }
+			if !ok {
+				break
+			}
 			go t.handleTransportError(err)
-		case <- ctx.Done(): 
+		case <-ctx.Done():
 		}
 	}
 }
@@ -317,11 +388,11 @@ func (t *tgTransport) handleMessage(ctx context.Context, msg *tgMessage) error {
 
 	t.sessionMapLock.Lock()
 	defer t.sessionMapLock.Unlock()
-	
+
 	if oldSess, ok := t.sessionMap[tgSessionKey{chatId: msg.Chat.Id, threadId: msg.MessageThreadId}]; ok {
 		return oldSess.msgRouter(ctx, msg)
 	}
-	
+
 	onThreadCreated := func(chatId, threadId tgInt) {
 		t.sessionMapLock.Lock()
 		defer t.sessionMapLock.Unlock()
@@ -346,7 +417,7 @@ func (t *tgTransport) handleMessage(ctx context.Context, msg *tgMessage) error {
 		onThreadCreated: onThreadCreated,
 	}
 
-	session := newSession(msg.Chat.Id, conf)
+	session := newSession(msg.Chat.Id, conf, t.appConf)
 
 	sessionKey := tgSessionKey{
 		chatId:   session.chatId,
@@ -368,7 +439,7 @@ func (t *tgTransport) handleCallback(ctx context.Context, cb *tgCallBackQuery) e
 	sess, ok := t.sessionMap[key]
 	t.sessionMapLock.Unlock()
 	if !ok {
-		return fmt.Errorf("%s session for callback not found") // write this error again
+		return fmt.Errorf("session for callback not found") // write this error again
 	}
 	return sess.cbRouter(ctx, cb)
 }
@@ -381,4 +452,4 @@ func (t *tgTransport) pruneSession(ctx context.Context) {
 
 }
 
-func (t *tgTransport) close()
+func (t *tgTransport) close() {}

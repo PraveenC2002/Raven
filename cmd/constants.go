@@ -32,15 +32,21 @@ const (
 // tg transport
 
 const (
-	pollTimeout                    = 30
-	clientTimeout                  = 35 * time.Second
-	getMethodLimit                 = 1
-	pollRetryBackoff               = 5 * time.Second // TODO: Implement exponential backoff on tg transport
-	endpointGetUpdate              = "getUpdate"
-	endpointCreateThread           = "createForumTopic"
-	endpointSendMessage            = "sendMessage"
-	endpointEditMessageText        = "editMessageText"
-	endpointEditMessageReplyMarkup = "editMessageReplyMarkup"
+	pollTimeout      = 30
+	clientTimeout    = 35 * time.Second
+	getMethodLimit   = 1
+	pollRetryBackoff = 5 * time.Second // TODO: Implement exponential backoff on tg transport
+)
+
+type tgEndpoint string
+
+const (
+	tgEPGetUpdate              tgEndpoint = "getUpdate"
+	tgEPCreateThread           tgEndpoint = "createForumTopic"
+	tgEPSendMessage            tgEndpoint = "sendMessage"
+	tgEPSendDoc                tgEndpoint = "sendDocument"
+	tgEPEditMessageText        tgEndpoint = "editMessageText"
+	tgEPEditMessageReplyMarkup tgEndpoint = "editMessageReplyMarkup"
 )
 
 const (
@@ -52,8 +58,10 @@ const (
 type tgSessionStatus int
 
 const (
-	tgSessionInit tgSessionStatus = iota
+	tgIdle tgSessionStatus = iota
+	tgSessionInit
 	tgSelectMachine
+	tgGetDiagnosisQuery
 	tgDiagnoseMachine
 )
 

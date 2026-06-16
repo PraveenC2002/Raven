@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -20,10 +21,22 @@ type sshBouncer struct {
 
 func newSSHBouncer() (*sshBouncer, error) {
 
-	f, err := os.Open("SSHPolicy.toml")
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil, fmt.Errorf("could not open SSHPolicy file : %s", err.Error())
+		return nil, err
 	}
+
+	policyDir := filepath.Join(home, ".raven", "policies")
+	err = os.MkdirAll(policyDir, 0o755)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(filepath.Join(policyDir, "SSHPolicy.toml"))
+	if err != nil {
+		return nil, fmt.Errorf("could not open SSH Policy file : %s", err.Error())
+	}
+	defer f.Close()
 
 	var policy shellPolicy
 	if err := toml.NewDecoder(f).Decode(&policy); err != nil {

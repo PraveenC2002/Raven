@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Raven Investigation Report</title>
+    <style>{{.CSS}</style>
+</head>
+<body>
+    <header class="hero">
+        <div class="hero-content">
+            <div class="title-wrapper">
+                <div class="logo"></div>
+                <h1>Raven Investigation Report</h1>
+            </div>
+            <div class="hero-meta">
+                <div class="timestamp">Generated: {{generatedTime}}</div>
+                <div class="confidence-badge badge-{{.Confidence}}">
+                    Confidence: {{.Confidence}}
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        {{if .MachineInfo}}
+        <section class="section">
+            <h2 class="section-header">Machine Information</h2>
+            <div class="card machine-info">
+                <div class="info-grid">
+                    <div class="info-group">
+                        <label>Target</label>
+                        <div class="info-value">{{.MachineInfo.Name}}</div>
+                    </div>
+                    <div class="info-group">
+                        <label>Description</label>
+                        <div class="info-value">{{.MachineInfo.Description}}</div>
+                    </div>
+                </div>
+                <div class="info-group query-group">
+                    <label>Reported Issue</label>
+                    <div class="query-block"><code>{{.MachineInfo.Query}}</code></div>
+                </div>
+            </div>
+        </section>
+        {{end}}
+
+        <section class="section">
+            <h2 class="section-header">Investigation Summary</h2>
+            <div class="card card-summary">
+                <p>{{.Summary}}</p>
+            </div>
+        </section>
+
+        <section class="section">
+            <h2 class="section-header">Root Cause Analysis</h2>
+            <div class="card card-danger">
+                <p>{{.RootCause}}</p>
+            </div>
+        </section>
+
+        {{if .Evidence}}
+        <section class="section">
+            <h2 class="section-header">Evidence Trail</h2>
+            <div class="table-wrapper">
+                <table class="evidence-table">
+                    <thead>
+                        <tr>
+                            <th class="col-action">Action Taken</th>
+                            <th class="col-observation">Observation</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{range .Evidence}}
+                        <tr>
+                            <td class="cell-action"><code>{{.Action}}</code></td>
+                            <td class="cell-observation">{{.Observation}}</td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        {{end}}
+
+        <section class="section">
+            <h2 class="section-header">Recommendation</h2>
+            <div class="card card-success">
+                <p>{{.Recommendation}}</p>
+            </div>
+        </section>
+
+        <section class="section avoid-break">
+            <h2 class="section-header">Confidence Assessment</h2>
+            <div class="card card-confidence">
+                <div class="confidence-header">
+                    <span class="confidence-badge badge-{{.Confidence}} large-badge">{{.Confidence}}</span>
+                </div>
+                <div class="confidence-reason">
+                    <p>{{.ConfidenceReason}}</p>
+                </div>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

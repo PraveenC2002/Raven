@@ -80,6 +80,13 @@ type tgEditMessageText[T any] struct {
 	ReplyMarkup T      `json:"reply_markup,omitempty"`
 }
 
+// TODO:Better name this
+type tgSendDoc struct {
+	ChatId   tgInt  `json:"chat_id"`
+	ThreadId tgInt  `json:"message_thread_id"`
+	Caption  string `json:"caption"`
+}
+
 type tgSendMessageResponse struct {
 	*tgBaseResponse
 	Result *tgMessage `json:"result"`
@@ -109,7 +116,6 @@ type machine struct {
 	CreatedAt   time.Time `db:"created_at"`
 	*connectionInfo
 }
-
 
 // ssh types
 type sshOutput struct {
@@ -199,8 +205,6 @@ type llmResponse struct {
 	clientErrors  *llmResponseErrors
 }
 
-type somethingElse struct {}
-
 // tool types
 type remoteSSHFunctionCall struct {
 	Command string `json:"command"`
@@ -229,7 +233,7 @@ type toolCall struct {
 }
 
 type investigationStep struct {
-	StepNumber int            `json:"step_number"`
+	StepNumber int         `json:"step_number"`
 	ToolCalls  []*toolCall `json:"tool_calls"`
 }
 
@@ -242,11 +246,24 @@ type investigationHistory struct {
 	Steps []*investigationStep `json:"steps"`
 }
 
+type finalReportConfidence string
+
+const (
+	ConfidenceHigh   finalReportConfidence = "HIGH"
+	ConfidenceMedium finalReportConfidence = "MEDIUM"
+	ConfidenceLow    finalReportConfidence = "LOW"
+)
+
 type diagnosisReport struct {
+	MachineInfo *struct {
+		Name        string
+		Description string
+		Query       string
+	}
 	Summary   string `json:"summary"`
 	RootCause string `json:"root_cause"`
 	Evidence  []*struct {
-		Command     string `json:"command"`
+		Action      string `json:"action"`
 		Observation string `json:"observation"`
 	} `json:"evidence"`
 	Recommendation   string                `json:"recommendation"`

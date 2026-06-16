@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,16 @@ type tgSessionData struct {
 		machineNames      []string
 		keyboardMessageId tgInt
 		totalPages        int
+	}
+	diagnoseMachine *struct {
+		machine *machine
+		query   string
+
+		agent *agent
+
+		loaderMsgId tgInt
+		updateMsgId tgInt
+		cntUpdates  int
 	}
 }
 
@@ -40,20 +51,24 @@ type tgSession struct {
 	cbHandlerMap   map[tgSessionStatus]func(context.Context, *tgCallBackQuery) error
 
 	lastActiveAt time.Time
+
+	appConf *config
 }
 
-func newSession(chatId tgInt, conf *tgSessionConf) *tgSession {
+func newSession(chatId tgInt, sessionConf *tgSessionConf, conf *config) *tgSession {
 
 	s := &tgSession{
 		chatId:        chatId,
 		status:        tgSessionInit,
-		tgSessionConf: conf,
+		tgSessionConf: sessionConf,
 
 		messageHandler: make(map[tgSessionStatus]func(context.Context, *tgMessage) error),
 		cmdHandlerMap:  make(map[tgCmd]func(context.Context, *tgMessage) error),
 		cbHandlerMap:   make(map[tgSessionStatus]func(context.Context, *tgCallBackQuery) error),
 
 		lastActiveAt: time.Now(),
+
+		appConf: conf,
 	}
 
 	s.bootstrapMsgHandler()
@@ -66,6 +81,7 @@ func newSession(chatId tgInt, conf *tgSessionConf) *tgSession {
 // ------------ Bootstrap ------------
 func (s *tgSession) bootstrapMsgHandler() {
 	s.messageHandler[tgSessionInit] = s.handleStatusInit
+	s.messageHandler[tgGetDiagnosisQuery] = s.handleStatusGetDiagnosisQuery
 }
 
 func (s *tgSession) bootstrapCmd() {
@@ -74,6 +90,23 @@ func (s *tgSession) bootstrapCmd() {
 
 func (s *tgSession) bootstrapCb() {
 	s.cbHandlerMap[tgSelectMachine] = s.cbSelectMachine
+}
+
+func (s *tgSession) createThread(ctx context.Context, name string) error {
+	vmLock := s.transport.vmLockProvider.getLock(name)
+	vmLock.Lock()
+	defer vmLock.Unlock()
+
+	threadId, err := s.transport.newThread(ctx, s.chatId, name)
+	if err != nil {
+		return err
+	}
+
+	s.threadId = *threadId
+
+	s.onThreadCreated(s.chatId, s.threadId)
+
+	return nil
 }
 
 // -------------- handle messages ------------
@@ -85,24 +118,30 @@ func (s *tgSession) msgRouter(ctx context.Context, msg *tgMessage) error {
 func (s *tgSession) handleStatusInit(ctx context.Context, msg *tgMessage) error {
 
 	if len(msg.Entities) != 1 {
-		err := fmt.Errorf("%s please use ONE of supported raven commands")
+		err := fmt.Errorf("please use ONE of supported raven commands")
 		return err
 	}
 
 	entity := msg.Entities[0]
 	if entity.Type != string(tgEntityCmd) {
-		err := fmt.Errorf("%s please use raven commands")
+		err := fmt.Errorf("please use raven commands")
 		return err
 	}
 
 	if entity.Offset != 0 {
-		err := fmt.Errorf("%s please use command format : /command <arg>")
+		err := fmt.Errorf("please use command format : /command <arg>")
 		return err
 	}
 
 	cmd := msg.Text[0:entity.Length]
 
 	return s.cmdRouter(ctx, tgCmd(cmd), msg)
+}
+
+func (s *tgSession) handleStatusGetDiagnosisQuery(ctx context.Context, msg *tgMessage) error {
+	s.data.diagnoseMachine.query = msg.Text
+	s.opDiagnoseMachine(ctx)
+	return nil
 }
 
 // ----------- handle commands ----------------
@@ -112,7 +151,7 @@ func (s *tgSession) cmdRouter(ctx context.Context, cmd tgCmd, msg *tgMessage) er
 
 	fn, ok := s.cmdHandlerMap[cmd]
 	if !ok {
-		err := fmt.Errorf("%s command : %s not supported, please use a valid command", cmd)
+		err := fmt.Errorf("command : %s not supported, please use a valid command", cmd)
 		return err
 	}
 
@@ -141,7 +180,7 @@ func (s *tgSession) cmdDiagnose(ctx context.Context, msg *tgMessage) error {
 		return s.sendNewMachineKeyboard(ctx, machineNames)
 	}
 
-	return s.opDiagnoseMachine(ctx, machine)
+	return s.opInitMachineDiagnosis(ctx, machine)
 }
 
 func (s *tgSession) getMachineNames() ([]string, error) {
@@ -176,7 +215,7 @@ func (s *tgSession) sendNewMachineKeyboard(ctx context.Context, machineNames []s
 		},
 	}
 
-	res, err := s.transport.send(ctx, payload, endpointSendMessage)
+	res, err := s.transport.send(ctx, payload, tgEPSendMessage)
 	if err != nil {
 		return err
 	}
@@ -231,10 +270,11 @@ func (s *tgSession) cbSelectMachine(ctx context.Context, cb *tgCallBackQuery) er
 
 	default:
 		machine, err := s.registry.getVm(data)
+		s.data.selectMachine = nil // cleanup
 		if err != nil {
 			return err
 		}
-		return s.opDiagnoseMachine(ctx, machine)
+		return s.opInitMachineDiagnosis(ctx, machine)
 	}
 }
 
@@ -253,7 +293,7 @@ func (s *tgSession) editMachineKeyboard(ctx context.Context, machineNames []stri
 		},
 	}
 
-	_, err := s.transport.send(ctx, payload, endpointEditMessageText)
+	_, err := s.transport.send(ctx, payload, tgEPEditMessageText)
 	if err != nil {
 		return err
 	}
@@ -263,43 +303,192 @@ func (s *tgSession) editMachineKeyboard(ctx context.Context, machineNames []stri
 
 // ---------- Operations ------------------------
 /*
- * Agent asks for something (query)
  * Agent sends interim updates
  * Agent sends classified errors
  * Agent sends final response
  */
-func (s *tgSession) opDiagnoseMachine(ctx context.Context, m *machine) error {
 
-	vmLock := s.transport.vmLockProvider.getLock(m.Name)
-	vmLock.Lock()
-	defer vmLock.Unlock()
+func (s *tgSession) opInitMachineDiagnosis(ctx context.Context, m *machine) error {
 
-	threadId, err := s.transport.newThread(ctx, s.chatId, m.Name)
+	err := s.createThread(ctx, m.Name)
 	if err != nil {
 		return err
 	}
 
-	s.threadId = *threadId
+	payload := &tgSendMessage[any]{
+		ChatId:   s.chatId,
+		ThreadId: s.threadId,
+		Text:     "What behavior would you like investigated?",
+	}
 
-	s.onThreadCreated(s.chatId, s.threadId)
+	_, err = s.transport.send(ctx, payload, tgEPSendMessage)
+	if err != nil {
+		return err
+	}
+
+	s.status = tgGetDiagnosisQuery
+
+	s.data.diagnoseMachine = &struct {
+		machine     *machine
+		query       string
+		agent       *agent
+		loaderMsgId tgInt
+		updateMsgId tgInt
+		cntUpdates  int
+	}{
+		machine: m,
+		query:   "",
+	}
+
+	return nil
+}
+
+func (s *tgSession) opDiagnoseMachine(ctx context.Context) error {
 
 	// TODO:errors beyond thread creation need to be handled properly, for now for the sake of simplicity we just return them
 
 	agentConf := &agentConf{
-		Machine: m,
-		Query:   "stubbed", // TODO:get query from user
+		Machine: s.data.diagnoseMachine.machine,
+		Query:   s.data.diagnoseMachine.query,
 	}
-	// TODO:stubbed ctx
-	a, err := newAgent(context.Background(), agentConf)
+
+	agent, err := newAgent(ctx, agentConf, s.appConf)
 	if err != nil {
 		return err
 	}
 
+	updCtx, cancelUpdCtx := context.WithCancel(ctx)
+	defer cancelUpdCtx()
+
+	s.data.diagnoseMachine.agent = agent
+	go s.opHandleDiagnosisUpdates(updCtx)
+
 	// TODO:handle agent result
-	_, aErr := a.run(context.Background())
+	out, aErr := agent.run(ctx)
 	if aErr != nil {
 		// TODO: handle agent err
 		return aErr.err
+	}
+
+	if res, ok := out.(*diagnosisResult); ok {
+		cancelUpdCtx()
+		//TODO: error handling
+		_ = s.sendMachineDiagnosisResult(ctx, res)
+		s.status = tgIdle
+		s.data.diagnoseMachine = nil
+	}
+
+	return nil
+}
+
+func (s *tgSession) sendLoader() {}
+
+func (s *tgSession) sendDiagnosisUpdate(ctx context.Context, upd string) error {
+
+	if s.data.diagnoseMachine.cntUpdates == 0 {
+
+		s.sendLoader()
+
+		payload := &tgSendMessage[any]{
+			ChatId:      s.chatId,
+			ThreadId:    s.threadId,
+			Text:        upd,
+			ReplyMarkup: nil,
+		}
+
+		res, err := s.transport.send(ctx, payload, tgEPSendMessage)
+		if err != nil {
+			return err
+		}
+
+		s.data.diagnoseMachine.cntUpdates++
+		s.data.diagnoseMachine.updateMsgId = res.Result.MessageId
+
+		return nil
+	}
+
+	payload := &tgEditMessageText[any]{
+		ChatId:      s.chatId,
+		MessageId:   s.data.diagnoseMachine.updateMsgId,
+		Text:        upd,
+		ReplyMarkup: nil,
+	}
+
+	_, err := s.transport.send(ctx, payload, tgEPEditMessageText)
+	if err != nil {
+		return err
+	}
+
+	s.data.diagnoseMachine.cntUpdates++
+
+	return nil
+}
+
+func (s *tgSession) opHandleDiagnosisUpdates(ctx context.Context) {
+
+	a := s.data.diagnoseMachine.agent
+
+	for {
+
+		select {
+		case upd := <-a.getUpdates():
+			s.sendDiagnosisUpdate(ctx, upd)
+		case <-ctx.Done():
+			return
+		}
+	}
+	//TODO: error handling
+}
+
+// TODO: Better Name this method
+func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnosisResult) error {
+
+	reportLoc, err := generatePDF(res.Report, s.appConf)
+	if err != nil {
+		return err
+	}
+
+	reportPdf, err := os.Open(reportLoc)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(reportLoc)
+
+	err = s.transport.sendDocument(
+		ctx,
+		&tgSendDoc{
+			ChatId:   s.chatId,
+			ThreadId: s.threadId,
+			Caption:  "Investigation report",
+		},
+		reportPdf,
+	)
+	if err != nil {
+		return err
+	}
+
+	historyLoc, err := generatePDF(res.History, s.appConf)
+	if err != nil {
+		return err
+	}
+
+	historyPdf, err := os.Open(historyLoc)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(historyLoc)
+
+	err = s.transport.sendDocument(
+		ctx,
+		&tgSendDoc{
+			ChatId:   s.chatId,
+			ThreadId: s.threadId,
+			Caption:  "Investigation history",
+		},
+		historyPdf,
+	)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -351,7 +540,7 @@ func (s *tgSession) removeMachineSelectionKeyboard(ctx context.Context) error {
 		Text:      "No VM selected",
 	}
 
-	_, err := s.transport.send(ctx, payload, endpointEditMessageText)
+	_, err := s.transport.send(ctx, payload, tgEPEditMessageText)
 	if err != nil {
 		return err
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	// "os"
 
 	_ "embed"
 
@@ -12,7 +11,7 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-func openPath(dbPath string) (*sql.DB, error) {
+func openDBPath(dbPath string) (*sql.DB, error) {
 
 	dbPath = "file:" + dbPath + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dbPath)
@@ -25,13 +24,7 @@ func openPath(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	// schema, err := os.ReadFile(schemaSQL)
-	// if err != nil {
-	// 	db.Close()
-	// 	return nil, err
-	// }
-
-	if _, err = db.Exec(string(schemaSQL)); err != nil {
+	if _, err = db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, err
 	}

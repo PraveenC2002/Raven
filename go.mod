@@ -1,6 +1,6 @@
 module github.com/PraveenC2002/Raven.git
 
-go 1.25.3
+go 1.26.1
 
 require (
 	charm.land/lipgloss/v2 v2.0.3

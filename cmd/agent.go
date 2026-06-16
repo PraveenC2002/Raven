@@ -21,16 +21,16 @@ type agent struct {
 	errDomain    string
 }
 
-func newAgent(ctx context.Context, conf *agentConf) (*agent, error) {
+func newAgent(ctx context.Context, agentConf *agentConf, conf *config) (*agent, error) {
 
 	agent := &agent{
-		agentConf:    conf,
+		agentConf:    agentConf,
 		toolRegistry: make(map[string]LLMTool),
 		updateCh:     make(chan string, 20),
 		errDomain:    "agent error :",
 	}
 
-	err := agent.bootStrap(ctx)
+	err := agent.bootStrap(ctx, conf)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func newAgent(ctx context.Context, conf *agentConf) (*agent, error) {
 	return agent, nil
 }
 
-func (a *agent) bootStrap(ctx context.Context) error {
+func (a *agent) bootStrap(ctx context.Context, conf *config) error {
 
 	// Init tool registry
 	emitToolUpdate := func(upd string) {
@@ -73,7 +73,7 @@ func (a *agent) bootStrap(ctx context.Context) error {
 	}
 
 	// setup llm
-	llm, err := newGemini(ctx, sysPrompt)
+	llm, err := newGemini(ctx, sysPrompt, conf)
 	if err != nil {
 		return err
 	}
