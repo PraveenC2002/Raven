@@ -1,4 +1,4 @@
-package main
+package raven
 
 import (
 	"bytes"
@@ -23,7 +23,6 @@ type tgSessionKey struct {
 
 type tgTransportConf struct {
 	userId         tgInt
-	addr           string
 	botToken       string
 	vmLockProvider *vmLockProvider
 }
@@ -41,10 +40,10 @@ type tgTransport struct {
 	callBackCh    chan *tgCallBackQuery
 	tranportErrCh chan *transportErr
 
-	appConf *config
+	ravenConf *ravenConfig
 }
 
-func newTransport(transporConf *tgTransportConf, conf *config) *tgTransport {
+func newTgTransport(transporConf *tgTransportConf, ravenConf *ravenConfig) *tgTransport {
 
 	t := &tgTransport{
 
@@ -61,7 +60,7 @@ func newTransport(transporConf *tgTransportConf, conf *config) *tgTransport {
 		callBackCh:    make(chan *tgCallBackQuery, 20),
 		tranportErrCh: make(chan *transportErr, 20),
 
-		appConf: conf,
+		ravenConf: ravenConf,
 	}
 
 	return t
@@ -89,8 +88,9 @@ func (t *tgTransport) pushTransportErr(kind transportErrKind, err error, chatId 
 	t.tranportErrCh <- pollErr
 }
 
+// TODO:Better name this method
 func (t *tgTransport) makeUrl(ep tgEndpoint) string {
-	return t.addr + t.botToken + "/" + string(ep)
+	return string(tgAPIUrl) + t.botToken + "/" + string(ep)
 }
 
 func (t *tgTransport) poll(ctx context.Context) {
@@ -107,7 +107,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 		params.Set("limit", strconv.Itoa(getMethodLimit))
 		params.Set("allowed_updates", `["message", "callback_query"]`)
 
-		reqUrl :=  t.makeUrl(tgEPGetUpdate) + "?" + params.Encode()
+		reqUrl := t.makeUrl(tgEPGetUpdate) + "?" + params.Encode()
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqUrl, nil)
 		if err != nil {
 			err = fmt.Errorf("%s", err.Error())
@@ -219,7 +219,7 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 
 	body := bytes.NewReader(payload)
 
-	reqUrl := t.addr + t.botToken + "/" + string(tgEPCreateThread)
+	reqUrl := t.makeUrl(tgEPCreateThread)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqUrl, body)
 	if err != nil {
 		return nil, err
@@ -262,7 +262,7 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 
 func (t *tgTransport) send(ctx context.Context, msg any, ep tgEndpoint) (*tgSendMessageResponse, error) {
 
-	// maybe add a switch case guard on msg type to enforce right type on right endpoint
+	// TODO:maybe add a switch case guard on msg type to enforce right type on right endpoint
 	payload, err := json.Marshal(msg)
 
 	if err != nil {
@@ -271,7 +271,7 @@ func (t *tgTransport) send(ctx context.Context, msg any, ep tgEndpoint) (*tgSend
 
 	body := bytes.NewReader(payload)
 
-	reqURL := t.addr + t.botToken + "/" + string(ep)
+	reqURL := t.makeUrl(ep)
 	req, err := http.NewRequestWithContext(ctx, "POST", reqURL, body)
 	if err != nil {
 		return nil, err
@@ -305,10 +305,17 @@ func (t *tgTransport) send(ctx context.Context, msg any, ep tgEndpoint) (*tgSend
 func (t *tgTransport) sendDocument(ctx context.Context, doc *tgSendDoc, pdf *os.File) error {
 
 	var body bytes.Buffer
-	
+
 	writer := multipart.NewWriter(&body)
 
 	writer.WriteField("chat_id", strconv.Itoa(int(doc.ChatId)))
+
+	if doc.ThreadId != 0 {
+		writer.WriteField(
+			"message_thread_id",
+			strconv.Itoa(int(doc.ThreadId)),
+		)
+	}
 
 	if len(doc.Caption) != 0 {
 		writer.WriteField("caption", doc.Caption)
@@ -329,31 +336,44 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgSendDoc, pdf *os.
 		return err
 	}
 
-	reqUrl := t.makeUrl(tgEPSendDoc) 
+	reqUrl := t.makeUrl(tgEPSendDoc)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, reqUrl, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set(
+		"Content-Type",
+		writer.FormDataContentType(),
+	)
 
 	res, err := t.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			err = fmt.Errorf("%s", ctx.Err().Error())
-			return err
+			return ctx.Err()
 		} else {
-			err = fmt.Errorf("poll error : %s", err.Error())
 			return err
 		}
 	}
 	defer res.Body.Close()
-	
+
 	resbody, err := io.ReadAll(res.Body)
 	if err != nil {
 		err = fmt.Errorf("poll error : %s", err.Error())
-		res.Body.Close()
+		return err
 	}
 
+	//TODO:Generic response type ?
+	var sendRes tgSendMessageResponse
+	err = json.Unmarshal(resbody, &sendRes)
+	if err != nil {
+		return err
+	}
 
-	
+	if !sendRes.Ok {
+		return fmt.Errorf("%s", sendRes.Description)
+	}
 
-	
+	return nil
 }
 
 func (t *tgTransport) start(ctx context.Context) {
@@ -417,7 +437,7 @@ func (t *tgTransport) handleMessage(ctx context.Context, msg *tgMessage) error {
 		onThreadCreated: onThreadCreated,
 	}
 
-	session := newSession(msg.Chat.Id, conf, t.appConf)
+	session := newSession(msg.Chat.Id, conf, t.ravenConf)
 
 	sessionKey := tgSessionKey{
 		chatId:   session.chatId,

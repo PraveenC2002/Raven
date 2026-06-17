@@ -1,5 +1,4 @@
-package main
-
+package raven
 import "fmt"
 
 func truncate(s string, n int) string {

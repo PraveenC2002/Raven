@@ -1,5 +1,4 @@
-package main
-
+package raven
 import (
 	"regexp"
 	"time"
@@ -174,14 +173,21 @@ const (
 
 type llmFunctionCall struct {
 	ID   string
-	Name string
+	Name llmToolName
 	Args map[string]any
+}
+
+type llmToolAction struct {
+	Mode      string `json:"mode"`
+	Operation string `json:"operation"`
 }
 
 type llmFunctionResponse struct {
 	ID     string
-	Name   string
+	Name   llmToolName
+	Action *llmToolAction
 	Result string
+	Error  string
 }
 
 type llmPart struct {
@@ -225,11 +231,11 @@ type remoteSSHFunctionCall struct {
 
 // diagnosis output types
 type toolCall struct {
-	Name          string `json:"name"`
-	Action        string `json:"action"` //TODO: handle action filling.... the actual tool action that gets executed
-	OutputSummary string `json:"output_summary"`
-	Reasoning     string `json:"reasoning"`
-	Observation   string `json:"observation"`
+	Name          string         `json:"name"`
+	Action        *llmToolAction `json:"action"` //TODO: handle action filling.... the actual tool action that gets executed
+	OutputSummary string         `json:"output_summary"`
+	Reasoning     string         `json:"reasoning"`
+	Observation   string         `json:"observation"`
 }
 
 type investigationStep struct {
@@ -238,11 +244,6 @@ type investigationStep struct {
 }
 
 type investigationHistory struct {
-	MachineInfo *struct {
-		Name        string
-		Description string
-	} `json:"machineInfo"`
-	Query string               `json:"query"`
 	Steps []*investigationStep `json:"steps"`
 }
 
@@ -255,16 +256,12 @@ const (
 )
 
 type diagnosisReport struct {
-	MachineInfo *struct {
-		Name        string
-		Description string
-		Query       string
-	}
+	*machine
 	Summary   string `json:"summary"`
 	RootCause string `json:"root_cause"`
 	Evidence  []*struct {
-		Action      string `json:"action"`
-		Observation string `json:"observation"`
+		Action      *llmToolAction `json:"action"`
+		Observation string         `json:"observation"`
 	} `json:"evidence"`
 	Recommendation   string                `json:"recommendation"`
 	Confidence       finalReportConfidence `json:"confidence"`

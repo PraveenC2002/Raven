@@ -1,4 +1,4 @@
-package main
+package raven
 
 import "time"
 
@@ -6,7 +6,6 @@ import "time"
 const noOp = "no op"
 
 // networking
-
 const (
 	BaseRetryBackoffTime = 200 * time.Millisecond
 	MaxRetry             = 10
@@ -14,7 +13,6 @@ const (
 )
 
 // Transport
-
 type transportErr struct {
 	kind   transportErrKind
 	err    error
@@ -30,6 +28,12 @@ const (
 )
 
 // tg transport
+
+type tgAPIUrltype string
+
+const (
+	tgAPIUrl tgAPIUrltype = "https://api.telegram.org/bot"
+)
 
 const (
 	pollTimeout      = 30
@@ -92,6 +96,14 @@ const (
 	agentErrLlmRetry
 )
 
+type llmToolName string
+
 const (
-	ToolExecuteSSH = "execute_ssh"
+	ToolExecuteSSH llmToolName = "execute_ssh"
+)
+
+type llmToolMode string
+
+const (
+	llmTMShell llmToolMode = "shell"
 )

@@ -1,10 +1,11 @@
-package main
+package raven
 
 import (
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"html/template"
 	"os"
 	"strconv"
 	"strings"
@@ -52,10 +53,10 @@ type tgSession struct {
 
 	lastActiveAt time.Time
 
-	appConf *config
+	ravenConf *ravenConfig
 }
 
-func newSession(chatId tgInt, sessionConf *tgSessionConf, conf *config) *tgSession {
+func newSession(chatId tgInt, sessionConf *tgSessionConf, ravenConf *ravenConfig) *tgSession {
 
 	s := &tgSession{
 		chatId:        chatId,
@@ -68,7 +69,7 @@ func newSession(chatId tgInt, sessionConf *tgSessionConf, conf *config) *tgSessi
 
 		lastActiveAt: time.Now(),
 
-		appConf: conf,
+		ravenConf: ravenConf,
 	}
 
 	s.bootstrapMsgHandler()
@@ -352,7 +353,7 @@ func (s *tgSession) opDiagnoseMachine(ctx context.Context) error {
 		Query:   s.data.diagnoseMachine.query,
 	}
 
-	agent, err := newAgent(ctx, agentConf, s.appConf)
+	agent, err := newAgent(ctx, agentConf, s.ravenConf)
 	if err != nil {
 		return err
 	}
@@ -443,7 +444,39 @@ func (s *tgSession) opHandleDiagnosisUpdates(ctx context.Context) {
 // TODO: Better Name this method
 func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnosisResult) error {
 
-	reportLoc, err := generatePDF(res.Report, s.appConf)
+	type diagnosisContext struct {
+		MachineName        string
+		MachineDescription string
+		ReportedIssue      string
+	}
+
+	type pdfTemplateData struct {
+		*diagnosisContext
+		Content any
+		CSS     string
+	}
+
+	diagnosisCtx := &diagnosisContext{
+		MachineName:        s.data.diagnoseMachine.machine.Name,
+		MachineDescription: s.data.diagnoseMachine.machine.Description,
+		ReportedIssue:      s.data.diagnoseMachine.query,
+	}
+
+	reportData := &pdfTemplateData{
+		diagnosisContext: diagnosisCtx,
+		Content:          res.Report,
+		CSS:              investigationReportCSS,
+	}
+
+	funcMap := template.FuncMap{
+		"generatedTime": func() string {
+			return time.Now().Format("2006-01-02 15:04:05")
+		},
+	}
+
+	tmpl := template.Must(template.New("investigation report html").Funcs(funcMap).Parse(investigationReportHTML))
+
+	reportLoc, err := generatePDF("investigation-report-*.html", tmpl, reportData, s.ravenConf.tempDir)
 	if err != nil {
 		return err
 	}
@@ -467,7 +500,15 @@ func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnos
 		return err
 	}
 
-	historyLoc, err := generatePDF(res.History, s.appConf)
+	historyData := &pdfTemplateData{
+		diagnosisContext: diagnosisCtx,
+		Content:          res.History,
+		CSS:              investigationHistoryCSS,
+	}
+
+	tmpl = template.Must(template.New("investigation history html").Funcs(funcMap).Parse(investigationHistoryHTML))
+
+	historyLoc, err := generatePDF("investigation-history-*.html", tmpl, historyData, s.ravenConf.tempDir)
 	if err != nil {
 		return err
 	}

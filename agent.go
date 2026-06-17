@@ -1,4 +1,4 @@
-package main
+package raven
 
 import (
 	"bytes"
@@ -15,22 +15,24 @@ type agentConf struct {
 
 type agent struct {
 	*agentConf
-	toolRegistry map[string]LLMTool
+	toolRegistry map[llmToolName]LLMTool
 	llm          LLM
 	updateCh     chan string
 	errDomain    string
+	ravenConf    *ravenConfig
 }
 
-func newAgent(ctx context.Context, agentConf *agentConf, conf *config) (*agent, error) {
+func newAgent(ctx context.Context, agentConf *agentConf, ravenConf *ravenConfig) (*agent, error) {
 
 	agent := &agent{
 		agentConf:    agentConf,
-		toolRegistry: make(map[string]LLMTool),
+		toolRegistry: make(map[llmToolName]LLMTool),
 		updateCh:     make(chan string, 20),
 		errDomain:    "agent error :",
+		ravenConf: ravenConf,
 	}
 
-	err := agent.bootStrap(ctx, conf)
+	err := agent.bootStrap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +40,7 @@ func newAgent(ctx context.Context, agentConf *agentConf, conf *config) (*agent, 
 	return agent, nil
 }
 
-func (a *agent) bootStrap(ctx context.Context, conf *config) error {
+func (a *agent) bootStrap(ctx context.Context) error {
 
 	// Init tool registry
 	emitToolUpdate := func(upd string) {
@@ -49,7 +51,7 @@ func (a *agent) bootStrap(ctx context.Context, conf *config) error {
 	}
 
 	type toolEntry struct {
-		name string
+		name llmToolName
 		tool LLMTool
 	}
 
@@ -73,7 +75,7 @@ func (a *agent) bootStrap(ctx context.Context, conf *config) error {
 	}
 
 	// setup llm
-	llm, err := newGemini(ctx, sysPrompt, conf)
+	llm, err := newGemini(ctx, sysPrompt, a.ravenConf.geminiAPIKey)
 	if err != nil {
 		return err
 	}
@@ -152,7 +154,7 @@ func (a *agent) systemPrompt() (string, error) {
 	var buf bytes.Buffer
 
 	type toolManifest struct {
-		Name   string
+		Name   llmToolName
 		Policy string
 	}
 
@@ -202,7 +204,7 @@ func (a *agent) run(ctx context.Context) (any, *agentErr) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	a.emitUpdate("Finished machine diagnosis.")
 
 	return result, nil
@@ -408,9 +410,9 @@ func (a *agent) cleanUp() *agentErr {
 
 func newErrFr(fc *llmFunctionCall, err error) *llmFunctionResponse {
 	return &llmFunctionResponse{
-		ID:     fc.ID,
-		Name:   fc.Name,
-		Result: err.Error(),
+		ID:    fc.ID,
+		Name:  fc.Name,
+		Error: err.Error(),
 	}
 }
 

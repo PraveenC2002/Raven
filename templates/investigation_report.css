@@ -2,25 +2,29 @@
 	--bg-page: #d4d4d8;
 	--bg-surface: #fafafa;
 	--bg-code: #e4e4e7;
-
-	--border-subtle: #a1a1aa; 
+	--border-subtle: #a1a1aa;
 	--border-strong: #09090b;
 
 	--text-primary: #09090b;
 	--text-secondary: #27272a;
 	--text-muted: #52525b;
 
-	/* Technical Alarm - Refined for Grey Canvas */
+	/* Technical Alarm */
 	--accent-red-bg: #fee2e2;
 	--accent-red-border: #f87171;
 	--accent-red-text: #7f1d1d;
 	--accent-red-solid: #dc2626;
 
-	/* Technical Success - Refined for Grey Canvas */
+	/* Technical Success */
 	--accent-green-bg: #dcfce7;
 	--accent-green-border: #4ade80;
 	--accent-green-text: #14532d;
 	--accent-green-solid: #16a34a;
+
+	/* Tool Action */
+	--accent-blue: #2563eb;
+	--accent-blue-bg: #eff6ff;
+	--accent-blue-border: #bfdbfe;
 
 	/* Typography */
 	--font-sans:
@@ -302,20 +306,45 @@ main {
 }
 
 .col-action {
-	width: 38%;
-}
-.col-observation {
-	width: 62%;
+	width: 45%;
 }
 
-.cell-action code {
-	color: var(--text-primary);
-	background-color: var(--bg-code);
+.col-observation {
+	width: 55%;
+}
+
+.cell-action {
+	vertical-align: top;
+}
+
+.action-mode {
+	display: inline-block;
+	font-family: var(--font-mono);
+	font-size: 7.5pt;
+	font-weight: 700;
+	text-transform: uppercase;
+	color: var(--accent-blue);
+	background-color: var(--accent-blue-bg);
+	border: 1px solid var(--accent-blue-border);
 	padding: 2pt 5pt;
 	border-radius: 3pt;
+	margin-bottom: 6pt;
+}
+
+.action-operation {
+	display: block;
+}
+
+.action-operation code {
+	display: block;
+	color: var(--text-primary);
+	background-color: var(--bg-code);
+	padding: 6pt 8pt;
+	border-radius: 4pt;
 	border: 1px solid var(--border-subtle);
 	word-break: break-all;
 	font-weight: 600;
+	line-height: 1.4;
 }
 
 .cell-observation {

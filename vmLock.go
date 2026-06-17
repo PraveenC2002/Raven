@@ -1,4 +1,4 @@
-package main
+package raven
 
 import (
 	"sync"

@@ -1,4 +1,4 @@
-package main
+package raven
 
 import (
 	"context"
@@ -73,6 +73,21 @@ var gemTools = &genai.Tool{
 	FunctionDeclarations: []*genai.FunctionDeclaration{gemExecuteSSHDecl},
 }
 
+var gemToolActionSchema = &genai.Schema{
+	Type:        genai.TypeObject,
+	Description: "action object which you recieved in function response for a function's function call",
+	Properties: map[string]*genai.Schema{
+		"mode": {
+			Type:        genai.TypeString,
+			Description: "function call execution environment",
+		},
+		"operation": {
+			Type:        genai.TypeString,
+			Description: "operation that was performed by function call",
+		},
+	},
+}
+
 var gemReportSchema = &genai.Schema{
 	Type: genai.TypeObject,
 	Properties: map[string]*genai.Schema{
@@ -90,10 +105,7 @@ var gemReportSchema = &genai.Schema{
 			Items: &genai.Schema{
 				Type: genai.TypeObject,
 				Properties: map[string]*genai.Schema{
-					"action": {
-						Type:        genai.TypeString,
-						Description: "action which you performed",
-					},
+					"action": gemToolActionSchema,
 					"observation": {
 						Type:        genai.TypeString,
 						Description: "result which you got which is an evidence to your root cause analysis claim",
@@ -138,27 +150,6 @@ var gemInvestigationHistorySchema = &genai.Schema{
 	Description: "Chronological record of the complete investigation performed to diagnose the machine and answer the user's query.",
 	Type:        genai.TypeObject,
 	Properties: map[string]*genai.Schema{
-		"machineInfo": {
-			Type:        genai.TypeObject,
-			Description: "Information about the machine that was investigated.",
-			Properties: map[string]*genai.Schema{
-				"name": {
-					Type:        genai.TypeString,
-					Description: "Unique machine name or identifier provided at the start of the investigation.",
-				},
-				"description": {
-					Type:        genai.TypeString,
-					Description: "Machine description provided at the start of investigation..",
-				},
-			},
-			Required: []string{"name", "description"},
-		},
-
-		"query": {
-			Type:        genai.TypeString,
-			Description: "Original user request or problem statement that initiated the investigation.",
-		},
-
 		"steps": {
 			Type:        genai.TypeArray,
 			Description: "Chronological sequence of investigation steps performed while diagnosing the machine.",
@@ -183,10 +174,7 @@ var gemInvestigationHistorySchema = &genai.Schema{
 									Description: "Name of the tool that was invoked.",
 								},
 
-								"action": {
-									Type:        genai.TypeString,
-									Description: "Specific action performed using the tool, including relevant parameters and intent.",
-								},
+								"action": gemToolActionSchema,
 
 								"output_summary": {
 									Type:        genai.TypeString,
@@ -221,8 +209,6 @@ var gemInvestigationHistorySchema = &genai.Schema{
 		},
 	},
 	Required: []string{
-		"machineInfo",
-		"query",
 		"steps",
 	},
 }
@@ -260,12 +246,13 @@ type gemini struct {
 	systemPrompt string
 	history      []*genai.Content
 	errDomain    string
+	ravenConf    *ravenConfig
 }
 
-func newGemini(ctx context.Context, systemPrompt string, conf *config) (*gemini, error) {
+func newGemini(ctx context.Context, systemPrompt string, apiKey string) (*gemini, error) {
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  conf.geminiAPIKey,
+		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
@@ -296,7 +283,7 @@ func (g *gemini) getConf() *genai.GenerateContentConfig {
 	}
 }
 
-func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
+func (g *gemini) buildContent(parts []*llmPart) []*genai.Content {
 
 	content := &genai.Content{
 		Role: string(roleUser),
@@ -315,12 +302,26 @@ func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
 		}
 
 		if p.FunctionResponse != nil {
+
+			response := make(map[string]any)
+
+			if len(p.FunctionResponse.Result) != 0 {
+				response["result"] = p.FunctionResponse.Result
+			} else if len(p.FunctionResponse.Error) != 0 {
+				response["error"] = p.FunctionResponse.Error
+			}
+
+			if p.FunctionResponse.Action != nil {
+				response["Action"] = map[string]string{
+					"Mode":      p.FunctionResponse.Action.Mode,
+					"Operation": p.FunctionResponse.Action.Operation,
+				}
+			}
+
 			fr := &genai.FunctionResponse{
-				ID:   p.FunctionResponse.ID,
-				Name: p.FunctionResponse.Name,
-				Response: map[string]any{
-					"result": p.FunctionResponse.Result,
-				},
+				ID:       p.FunctionResponse.ID,
+				Name:     string(p.FunctionResponse.Name),
+				Response: response,
 			}
 
 			part := &genai.Part{
@@ -336,7 +337,7 @@ func (g *gemini) getContent(parts []*llmPart) []*genai.Content {
 	return []*genai.Content{content}
 }
 
-func (g *gemini) getLLMMessage(resp *genai.GenerateContentResponse) *llmMessage {
+func (g *gemini) extractLLMMessage(resp *genai.GenerateContentResponse) *llmMessage {
 	var msg llmMessage
 
 	if len(resp.Candidates) > 0 {
@@ -354,7 +355,7 @@ func (g *gemini) getLLMMessage(resp *genai.GenerateContentResponse) *llmMessage 
 
 				fc := llmFunctionCall{
 					ID:   p.FunctionCall.ID,
-					Name: p.FunctionCall.Name,
+					Name: llmToolName(p.FunctionCall.Name),
 					Args: p.FunctionCall.Args,
 				}
 
@@ -452,7 +453,7 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 		contents = append(contents, g.history...)
 	}
 
-	contents = append(contents, g.getContent(parts)...)
+	contents = append(contents, g.buildContent(parts)...)
 
 	resp, agentErr := g.call(ctx, contents)
 
@@ -476,5 +477,5 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 
 	g.history = append(g.history, resp.Candidates[0].Content)
 
-	return g.getLLMMessage(resp), nil
+	return g.extractLLMMessage(resp), nil
 }

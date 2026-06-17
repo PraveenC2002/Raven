@@ -1,4 +1,4 @@
-package main
+package raven
 
 import (
 	"bytes"
@@ -217,7 +217,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 	return nil
 }
 
-func (b *sshBouncer) describe(toolName string) (string, error) {
+func (b *sshBouncer) describe(toolName llmToolName) (string, error) {
 
 	shellPolicyTempl := `
 	This is {{.ToolName}} tool's shell command security policy.
@@ -311,7 +311,7 @@ func (b *sshBouncer) describe(toolName string) (string, error) {
 	var buf bytes.Buffer
 	payload := &struct {
 		*sshBouncer
-		ToolName string
+		ToolName llmToolName
 	}{
 		sshBouncer: b,
 		ToolName:   toolName,

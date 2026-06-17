@@ -1,5 +1,4 @@
-package main
-
+package raven
 import (
 	"bytes"
 	"context"
@@ -22,7 +21,7 @@ type remoteSSH struct {
 	emitUpdate func(string)
 }
 
-// Alpha discovery!! We can have bash scripts through toml... 
+// Alpha discovery!! We can have bash scripts through toml...
 // with same security architecture (and metachars too in our commands)
 // TODO : implement dial with ctx..
 func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
@@ -59,7 +58,6 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 	if err != nil {
 		return nil, err
 	}
-	
 
 	bouncer, err := newSSHBouncer()
 	if err != nil {
@@ -69,7 +67,7 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, error) {
 	return &remoteSSH{
 		client:    client,
 		bouncer:   bouncer,
-		errDomain: ToolExecuteSSH + " error :",
+		errDomain: string(ToolExecuteSSH) + " error :",
 	}, nil
 }
 
@@ -157,7 +155,7 @@ func (r *remoteSSH) setUpdateEmitter(emitUpdate func(string)) {
 	r.emitUpdate = emitUpdate
 }
 
-func (r *remoteSSH) getToolPolicy(toolName string) (string, error) {
+func (r *remoteSSH) getToolPolicy(toolName llmToolName) (string, error) {
 	policy, err := r.bouncer.describe(toolName)
 	if err != nil {
 		err = fmt.Errorf("%s tool policy retrieval error for tool %s.\nError : %s", r.errDomain, toolName, err.Error())
@@ -214,7 +212,7 @@ func (r *remoteSSH) callTool(ctx context.Context, fc *llmFunctionCall) (*llmFunc
 	if err != nil {
 		return newErrFr(fc, err), nil
 	}
-	
+
 	r.emitUpdate("validating shell command")
 	err = r.bouncer.validate(fcObj)
 	if err != nil {
@@ -257,14 +255,18 @@ func (r *remoteSSH) callTool(ctx context.Context, fc *llmFunctionCall) (*llmFunc
 
 	r.emitUpdate("returing shell command output")
 	return &llmFunctionResponse{
-		ID:     fc.ID,
-		Name:   fc.Name,
+		ID:   fc.ID,
+		Name: fc.Name,
+		Action: &llmToolAction{
+			Mode:      string(llmTMShell),
+			Operation: cmd,
+		},
 		Result: buf.String(),
 	}, nil
 }
 
 func (r *remoteSSH) close() error {
-	// error dropped on purpose, because 
+	// error dropped on purpose, because
 	r.closeConn()
 	return nil
 }

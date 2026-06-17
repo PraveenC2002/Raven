@@ -1,177 +1,55 @@
-package main
+package raven
 
 import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
 	"github.com/charmbracelet/huh"
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
-/*
- within a single authorized_keys line you can prefix per-key restrictions -from="1.2.3.4" (lock to an IP),
- no-port-forwarding, etc. So you can clamp even one key.
-*/
-
-type registry struct {
-	db *sql.DB
+type ravenCLI struct {
+	cli *cobra.Command
+	db  *sql.DB
 }
 
-func (r *registry) initUser(o *owner) error {
+func NewRavenCLI() (RavenCLI, error) {
 
-	const query = `
-		INSERT OR REPLACE INTO owner
-		(id, owner_id)
-		VALUES
-		(?, ?)
-	`
-
-	o.Id = 1
-	_, err := r.db.Exec(query, o.Id, o.OwnerId)
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	dbPath := filepath.Join(homeDir, ".raven", "raven.db")
+	db, err := openDBPath(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	// .db done
+
+	reg := &registry{
+		db: db,
+	}
+	return &ravenCLI{
+		cli: setupCmd(reg),
+		db:  db,
+	}, nil
 }
 
-func (r *registry) getUser() (*tgInt, error) {
-
-	const query = `
-		SELECT 
-		owner_id
-		FROM owner
-	`
-
-	row := r.db.QueryRow(query)
-
-	var ownerId tgInt
-
-	err := row.Scan(&ownerId); 
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("no user found")
-	}
+func (r *ravenCLI) Run() error {
+	defer r.db.Close()
 	
-	if err != nil {
-		return nil, err
-	}
-
-	return &ownerId, nil 
-}
-
-func (r *registry) addVm(m *machine) error {
-
-	m.Id = uuid.New()
-	m.CreatedAt = time.Now()
-
-	const query = `
-		INSERT INTO machines
-		(id, name, description, created_at, host, port, ssh_user, key_path, host_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	_, err := r.db.Exec(query, m.Id, m.Name, m.Description, m.CreatedAt, m.Host, m.Port, m.SshUser, m.KeyPath, m.HostKey)
-	if err != nil {
-		return fmt.Errorf("insert machine %q: %w", m.Name, err)
-	}
-
 	return nil
 }
 
-func (r *registry) removeVm(name string) error {
-
-	const query = `
-		DELETE
-		FROM machines
-		WHERE name = ?
-	`
-
-	_, err := r.db.Exec(query, name)
-	if err != nil {
-		return fmt.Errorf("remove machine %q: %w", name, err)
-	}
-
-	return nil
-}
-
-func (r *registry) getVm(name string) (*machine, error) {
-
-	const query = `
-		SELECT
-		id, name, description, created_at, host, port, ssh_user, key_path, host_key
-		FROM machines
-		WHERE name = ?
-	`
-
-	row := r.db.QueryRow(query, name)
-
-	m := &machine{}
-	err := row.Scan(&m.Id, &m.Name, &m.Description, &m.CreatedAt, &m.Host, &m.Port, &m.SshUser, &m.KeyPath, &m.HostKey)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("no machine with name %s found", name)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return m, nil
-}
-
-func (r *registry) listVm() ([]*machine, error) {
-
-	const query = `
-		SELECT
-		id, name, description, created_at, host, port, ssh_user, key_path, host_key
-		FROM machines
-	`
-	rows, err := r.db.Query(query)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var machines []*machine
-	for rows.Next() {
-		m := &machine{}
-		err := rows.Scan(&m.Id, &m.Name, &m.Description, &m.CreatedAt, &m.Host, &m.Port, &m.SshUser, &m.KeyPath, &m.HostKey)
-		if err != nil {
-			return nil, err
-		}
-		machines = append(machines, m)
-	}
-
-	if rows.Err() != nil {
-		return nil, rows.Err()
-	}
-
-	return machines, nil
-}
-
-func (r *registry) updateVm(m *machine) error {
-
-	const query = `
-		UPDATE machines
-		SET
-		name=?, description=?, host=?, port=?, ssh_user=?, key_path=?, host_key=?
-		WHERE id = ?
-	`
-
-	_, err := r.db.Exec(query, m.Name, m.Description, m.Host, m.Port, m.SshUser, m.KeyPath, m.HostKey, m.Id)
-	if err != nil {
-		return fmt.Errorf("update machine %q: %w", m.Name, err)
-	}
-
-	return nil
-}
-
-func setupCmd(r *registry) *cobra.Command {
+func setupCmd(r Registry) *cobra.Command {
 
 	rootCmd := &cobra.Command{
 		Use:   "raven",
@@ -327,7 +205,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 }
 
 // TODO: Enforce hard 64 chars limit on machine name
-func newAddVmCmd(r *registry) *cobra.Command {
+func newAddVmCmd(r Registry) *cobra.Command {
 
 	add := func(cmd *cobra.Command, args []string) error {
 
@@ -341,8 +219,6 @@ func newAddVmCmd(r *registry) *cobra.Command {
 			return nil
 		}
 
-		
-
 		return r.addVm(m)
 	}
 
@@ -355,7 +231,7 @@ func newAddVmCmd(r *registry) *cobra.Command {
 	return addVmCmd
 }
 
-func newRemoveVmCmd(r *registry) *cobra.Command {
+func newRemoveVmCmd(r Registry) *cobra.Command {
 
 	remove := func(cmd *cobra.Command, args []string) error {
 		if err := r.removeVm(args[0]); err != nil {
@@ -374,7 +250,7 @@ func newRemoveVmCmd(r *registry) *cobra.Command {
 	return removeVmCmd
 }
 
-func newUpdateVmCmd(r *registry) *cobra.Command {
+func newUpdateVmCmd(r Registry) *cobra.Command {
 
 	update := func(cmd *cobra.Command, args []string) error {
 
@@ -408,11 +284,11 @@ func newUpdateVmCmd(r *registry) *cobra.Command {
 func listMachines(machines []*machine) {
 
 	var (
-		white     = lipgloss.Color("#FAFAFA")
-		headerStyle   = lipgloss.NewStyle().
-			Foreground(white).
-			Bold(true).
-			Align(lipgloss.Center)
+		white       = lipgloss.Color("#FAFAFA")
+		headerStyle = lipgloss.NewStyle().
+				Foreground(white).
+				Bold(true).
+				Align(lipgloss.Center)
 		cellStyle     = lipgloss.NewStyle().Padding(0, 1).Foreground(white)
 		labelColStyle = cellStyle.Bold(true)
 	)
@@ -439,7 +315,7 @@ func listMachines(machines []*machine) {
 	lipgloss.Println(t)
 }
 
-func newListVmCmd(r *registry) *cobra.Command {
+func newListVmCmd(r Registry) *cobra.Command {
 
 	list := func(cmd *cobra.Command, args []string) error {
 		machines, err := r.listVm()
@@ -508,7 +384,7 @@ func showMachine(m *machine) {
 	lipgloss.Println(boxStyle.Render(content))
 }
 
-func newShowVmCmd(r *registry) *cobra.Command {
+func newShowVmCmd(r Registry) *cobra.Command {
 
 	show := func(cmd *cobra.Command, args []string) error {
 
@@ -532,7 +408,7 @@ func newShowVmCmd(r *registry) *cobra.Command {
 	return showVmCmd
 }
 
-func newInitCmd(r *registry) *cobra.Command {
+func newInitCmd(r Registry) *cobra.Command {
 
 	var (
 		ownerId int64

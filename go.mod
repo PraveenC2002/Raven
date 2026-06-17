@@ -1,4 +1,4 @@
-module github.com/PraveenC2002/Raven.git
+module github.com/PraveenC2002/raven
 
 go 1.26.1
 

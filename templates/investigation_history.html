@@ -3,7 +3,7 @@
 	<head>
 		<meta charset="UTF-8" />
 		<title>Raven Investigation History</title>
-		<link rel="stylesheet" href="investigation_history.css" />
+		<style>{{.CSS}}</style>
 	</head>
 	<body>
 		<header class="hero">
@@ -12,10 +12,8 @@
 					<div class="logo"></div>
 					<h1>Raven Investigation History</h1>
 				</div>
-
 				<div class="hero-meta">
 					<div class="timestamp">Generated: {{generatedTime}}</div>
-
 					<div class="mode-badge">Audit Log</div>
 				</div>
 			</div>
@@ -25,30 +23,22 @@
 			{{if .MachineInfo}}
 			<section class="section">
 				<h2 class="section-header">Machine Information</h2>
-
 				<div class="card machine-info">
 					<div class="info-table">
 						<div class="info-row">
 							<div class="info-cell label">Machine Name</div>
-
-							<div class="info-cell value">
-								{{.MachineInfo.Name}}
-							</div>
+							<div class="info-cell value">{{.MachineName}}</div>
 						</div>
-
 						<div class="info-row">
 							<div class="info-cell label">Description</div>
-
 							<div class="info-cell value">
-								{{.MachineInfo.Description}}
+								{{.MachineDescription}}
 							</div>
 						</div>
-
 						<div class="info-row">
 							<div class="info-cell label">Reported Issue</div>
-
 							<div class="info-cell value query-value">
-								{{.Query}}
+								{{.ReportedIssue}}
 							</div>
 						</div>
 					</div>
@@ -57,7 +47,6 @@
 			{{end}} {{if .Steps}}
 			<section class="section">
 				<h2 class="section-header">Investigation Timeline</h2>
-
 				<div class="timeline">
 					{{range .Steps}}
 					<div class="timeline-step">
@@ -76,16 +65,21 @@
 											{{.Name}}
 										</span>
 									</div>
-
 									<div class="tool-action-command">
-										<code>{{.Action}}</code>
+										{{if .Action}}
+										<span class="tool-action-mode"
+											>{{.Action.Mode}}</span
+										>
+										<div class="tool-action-operation">
+											<code>{{.Action.Operation}}</code>
+										</div>
+										{{end}}
 									</div>
 								</div>
 
 								<div class="tool-body">
 									<div class="field-group">
 										<div class="field-label">Reasoning</div>
-
 										<div
 											class="field-content reasoning-content"
 										>
@@ -99,7 +93,6 @@
 												<div class="field-label">
 													Observation
 												</div>
-
 												<div
 													class="field-content observation-content"
 												>
@@ -111,7 +104,6 @@
 												<div class="field-label">
 													Output Summary
 												</div>
-
 												<div
 													class="field-content output-content"
 												>

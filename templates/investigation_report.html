@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>Raven Investigation Report</title>
-    <style>{{.CSS}</style>
+    <style>{{.CSS}}</style>
 </head>
 <body>
     <header class="hero">
@@ -13,7 +13,7 @@
                 <h1>Raven Investigation Report</h1>
             </div>
             <div class="hero-meta">
-                <div class="timestamp">Generated: {{generatedTime}}</div>
+                <div class="timestamp">Generated: {{.GeneratedTime}}</div>
                 <div class="confidence-badge badge-{{.Confidence}}">
                     Confidence: {{.Confidence}}
                 </div>
@@ -22,27 +22,25 @@
     </header>
 
     <main>
-        {{if .MachineInfo}}
         <section class="section">
             <h2 class="section-header">Machine Information</h2>
             <div class="card machine-info">
                 <div class="info-grid">
                     <div class="info-group">
                         <label>Target</label>
-                        <div class="info-value">{{.MachineInfo.Name}}</div>
+                        <div class="info-value">{{.MachineName}}</div>
                     </div>
                     <div class="info-group">
                         <label>Description</label>
-                        <div class="info-value">{{.MachineInfo.Description}}</div>
+                        <div class="info-value">{{.MachineDescription}}</div>
                     </div>
                 </div>
                 <div class="info-group query-group">
                     <label>Reported Issue</label>
-                    <div class="query-block"><code>{{.MachineInfo.Query}}</code></div>
+                    <div class="query-block"><code>{{.ReportedIssue}}</code></div>
                 </div>
             </div>
         </section>
-        {{end}}
 
         <section class="section">
             <h2 class="section-header">Investigation Summary</h2>
@@ -72,7 +70,12 @@
                     <tbody>
                         {{range .Evidence}}
                         <tr>
-                            <td class="cell-action"><code>{{.Action}}</code></td>
+                            <td class="cell-action">
+                                {{if .Action}}
+                                <span class="action-mode">{{.Action.Mode}}</span>
+                                <div class="action-operation"><code>{{.Action.Operation}}</code></div>
+                                {{end}}
+                            </td>
                             <td class="cell-observation">{{.Observation}}</td>
                         </tr>
                         {{end}}
