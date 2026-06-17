@@ -3,7 +3,21 @@ package raven
 import "time"
 
 // general
-const noOp = "no op"
+
+type dockerContainerName string 
+
+const (
+	ravenContainer dockerContainerName = "raven"
+)
+
+type dockerImageAddr string
+const (
+	ravenImageAddr dockerImageAddr = "" // TODO
+)
+
+const (
+	noOp = "no op"
+)
 
 // networking
 const (

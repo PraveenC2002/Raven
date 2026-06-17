@@ -1,12 +1,16 @@
 package raven
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
@@ -45,7 +49,7 @@ func NewRavenCLI() (RavenCLI, error) {
 
 func (r *ravenCLI) Run() error {
 	defer r.db.Close()
-	
+
 	return nil
 }
 
@@ -61,11 +65,11 @@ func setupCmd(r Registry) *cobra.Command {
 		Short: "virtual machines for raven",
 	}
 
-	addVmCmd := newAddVmCmd(r)
-	removeVmCmd := newRemoveVmCmd(r)
-	updateVmCmd := newUpdateVmCmd(r)
-	listVmCmd := newListVmCmd(r)
-	showVmCmd := newShowVmCmd(r)
+	addVmCmd := newVmAddCmd(r)
+	removeVmCmd := newVmRemoveCmd(r)
+	updateVmCmd := newVmUpdateCmd(r)
+	listVmCmd := newVmListCmd(r)
+	showVmCmd := newVmShowCmd(r)
 
 	vmCmd.AddCommand(addVmCmd, removeVmCmd, updateVmCmd, listVmCmd, showVmCmd)
 
@@ -76,6 +80,7 @@ func setupCmd(r Registry) *cobra.Command {
 	return rootCmd
 }
 
+// ---------- CRUD CLI --------------
 func huhMachineForm(m *machine, action string) (bool, error) {
 
 	nameInp := huh.NewInput().
@@ -205,7 +210,7 @@ func huhMachineForm(m *machine, action string) (bool, error) {
 }
 
 // TODO: Enforce hard 64 chars limit on machine name
-func newAddVmCmd(r Registry) *cobra.Command {
+func newVmAddCmd(r Registry) *cobra.Command {
 
 	add := func(cmd *cobra.Command, args []string) error {
 
@@ -231,7 +236,7 @@ func newAddVmCmd(r Registry) *cobra.Command {
 	return addVmCmd
 }
 
-func newRemoveVmCmd(r Registry) *cobra.Command {
+func newVmRemoveCmd(r Registry) *cobra.Command {
 
 	remove := func(cmd *cobra.Command, args []string) error {
 		if err := r.removeVm(args[0]); err != nil {
@@ -250,7 +255,7 @@ func newRemoveVmCmd(r Registry) *cobra.Command {
 	return removeVmCmd
 }
 
-func newUpdateVmCmd(r Registry) *cobra.Command {
+func newVmUpdateCmd(r Registry) *cobra.Command {
 
 	update := func(cmd *cobra.Command, args []string) error {
 
@@ -315,7 +320,7 @@ func listMachines(machines []*machine) {
 	lipgloss.Println(t)
 }
 
-func newListVmCmd(r Registry) *cobra.Command {
+func newVmListCmd(r Registry) *cobra.Command {
 
 	list := func(cmd *cobra.Command, args []string) error {
 		machines, err := r.listVm()
@@ -384,7 +389,7 @@ func showMachine(m *machine) {
 	lipgloss.Println(boxStyle.Render(content))
 }
 
-func newShowVmCmd(r Registry) *cobra.Command {
+func newVmShowCmd(r Registry) *cobra.Command {
 
 	show := func(cmd *cobra.Command, args []string) error {
 
@@ -433,4 +438,278 @@ func newInitCmd(r Registry) *cobra.Command {
 	initCmd.MarkFlagRequired("tg-id")
 
 	return initCmd
+}
+
+// ---------- DOCKER CLI -----------
+
+func dockerCheckRavenStatus() (bool, error) {
+	cmd := exec.Command(
+		"docker",
+		"inspect",
+		"-f",
+		"{{.State.Running}}",
+		string(ravenContainer),
+	)
+
+	out, err := cmd.CombinedOutput()
+
+	if err != nil {
+		var cmdErr *exec.ExitError
+		if errors.As(err, &cmdErr) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return strings.TrimSpace(string(out)) == "true", nil
+}
+
+func dockerInspectRaven() (bool, error) {
+	cmd := exec.Command(
+		"docker",
+		"inspect",
+		string(ravenContainer),
+	)
+
+	_, err := cmd.CombinedOutput()
+
+	if err != nil {
+		var cmdErr *exec.ExitError
+		if errors.As(err, &cmdErr) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func dockerImageInspectRaven() (bool, error) {
+	cmd := exec.Command(
+		"docker",
+		"image",
+		"inspect",
+		string(ravenImageAddr),
+	)
+
+	_, err := cmd.CombinedOutput()
+
+	if err != nil {
+		var cmdErr *exec.ExitError
+		if errors.As(err, &cmdErr) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
+func dockerRunRaven(cbrCmd *cobra.Command) error {
+	err := exec.Command(
+		"docker",
+		"run",
+		"-d",
+		"--name",
+		string(ravenContainer),
+		string(ravenImageAddr),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	cbrCmd.Println("Started raven daemon successfully")
+	return nil
+}
+
+func dockerStartRaven(cbrCmd *cobra.Command) error {
+	err := exec.Command(
+		"docker",
+		"start",
+		string(ravenContainer),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	cbrCmd.Println("Raven daemon started successfully")
+	return nil
+}
+
+func dockerStopRaven(cbrCmd *cobra.Command) error {
+	err := exec.Command(
+		"docker",
+		"stop",
+		string(ravenContainer),
+	).Run()
+
+	if err != nil {
+		return err
+	}
+
+	cbrCmd.Println("raven daemon stopped successfully")
+	return nil
+}
+
+func dockerLogsRaven(ctx context.Context) error {
+
+	cmd := exec.CommandContext(
+		ctx,
+		"docker",
+		"logs",
+		"-f",
+		string(ravenContainer),
+	)
+
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	
+	return cmd.Run()
+}
+
+func newStartCmd() *cobra.Command {
+
+	runStart := func(cmd *cobra.Command, args []string) error {
+
+		imgExist, err := dockerImageInspectRaven()
+		if err != nil {
+			return err
+		}
+
+		if !imgExist {
+			cmd.Println("Raven docker image not found, downloading image")
+			err := dockerRunRaven(cmd)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+
+		// image atp exist
+		// do I check for the container or do I check if container is running ?
+
+		contExist, err := dockerInspectRaven()
+		if err != nil {
+			return err
+		}
+
+		if !contExist {
+			err := dockerRunRaven(cmd)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+
+		// check if container is already running
+		contRunning, err := dockerCheckRavenStatus()
+		if err != nil {
+			return err
+		}
+
+		if !contRunning {
+			err := dockerStartRaven(cmd)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+
+		cmd.Println("Raven daemon already running")
+		return nil
+	}
+
+	cmd := &cobra.Command{
+		Use:   "start",
+		Short: "start raven daemon",
+		RunE:  runStart,
+	}
+
+	return cmd
+}
+
+func newStopCmd() *cobra.Command {
+
+	runStop := func(cmd *cobra.Command, args []string) error {
+
+		contExist, err := dockerInspectRaven()
+		if err != nil {
+			return err
+		}
+
+		if !contExist {
+			cmd.Println("raven daemon is not running")
+			return nil
+		}
+	 
+		return dockerStopRaven(cmd)
+	}
+
+	cmd := &cobra.Command{
+		Use:   "stop",
+		Short: "stops raven daemon",
+		RunE:  runStop,
+	}
+
+	return cmd
+}
+
+func newStatusCmd() *cobra.Command {
+
+	runStat := func(cmd *cobra.Command, args []string) error {
+
+		contExist, err := dockerInspectRaven()
+		if err != nil {
+			return err
+		}
+
+		if !contExist {
+			cmd.Println("raven container does not exist")
+			return nil
+		}
+
+		isRunning, err := dockerCheckRavenStatus()
+		if err != nil {
+			return err
+		}
+
+		if !isRunning {
+			cmd.Println("raven daemon is not running")
+		} else {
+			cmd.Println("raven daemon is running")
+		}
+
+		return nil
+	}
+
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "raven daemon status",
+		RunE:  runStat,
+	}
+
+	return cmd
+}
+
+func newLogsCmd() *cobra.Command {
+
+	runLogs := func(cmd *cobra.Command, args []string) error {
+
+		ctx, stop := signal.NotifyContext(
+			context.Background(),
+			os.Interrupt,
+		)
+		defer stop()
+
+		return dockerLogsRaven(ctx)
+	}
+
+	cmd := &cobra.Command{
+		Use:   "logs",
+		Short: "raven daemon logs",
+		RunE:  runLogs,
+	}
+
+	return cmd
 }
