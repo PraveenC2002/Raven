@@ -57,7 +57,7 @@ func (a *agent) bootStrap(ctx context.Context) error {
 
 	var tools []*toolEntry
 
-	remoteSSH, err := newRemoteSSH(a.Machine.connectionInfo)
+	remoteSSH, err := newRemoteSSH(&a.Machine.connectionInfo)
 	if err != nil {
 		return err
 	}

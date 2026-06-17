@@ -10,9 +10,9 @@ const (
 	ravenContainer dockerContainerName = "raven"
 )
 
-type dockerImageAddr string
+type dockerImageRef string
 const (
-	ravenImageAddr dockerImageAddr = "" // TODO
+	ravenImageAddr dockerImageRef = "" // TODO
 )
 
 const (

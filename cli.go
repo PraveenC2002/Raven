@@ -50,6 +50,9 @@ func NewRavenCLI() (RavenCLI, error) {
 func (r *ravenCLI) Run() error {
 	defer r.db.Close()
 
+	if err := r.cli.Execute(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -74,8 +77,12 @@ func setupCmd(r Registry) *cobra.Command {
 	vmCmd.AddCommand(addVmCmd, removeVmCmd, updateVmCmd, listVmCmd, showVmCmd)
 
 	initCmd := newInitCmd(r)
-
-	rootCmd.AddCommand(vmCmd, initCmd)
+	startCmd := newStartCmd()
+	stopCmd := newStopCmd()
+	statCmd := newStatusCmd()
+	logCmd := newLogsCmd()
+	
+	rootCmd.AddCommand(vmCmd, initCmd, startCmd, stopCmd, statCmd, logCmd)
 
 	return rootCmd
 }
@@ -83,6 +90,8 @@ func setupCmd(r Registry) *cobra.Command {
 // ---------- CRUD CLI --------------
 func huhMachineForm(m *machine, action string) (bool, error) {
 
+	fmt.Printf("m = %#v\n", m.connectionInfo)
+	
 	nameInp := huh.NewInput().
 		Title("Name").
 		Description("must be unique").
