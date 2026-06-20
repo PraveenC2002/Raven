@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/PraveenC2002/raven"
+	"github.com/PraveenC2002/raven/internal"
 )
 
 func main() {

@@ -6,18 +6,35 @@ import (
 	"html/template"
 	"os"
 	"os/exec"
+	"time"
 )
 
-//go:embed templates/investigation_report.html
+//go:embed assets/templates/diagnosisResult/investigation_report.html
 var investigationReportHTML string
+var investigationReportTmpl = func() *template.Template {
+	funcMap := template.FuncMap{
+		"generatedTime": func() string {
+			return time.Now().Format("2006-01-02 15:04:05")
+		},
+	}
+	return template.Must(template.New("investigation report html").Funcs(funcMap).Parse(investigationReportHTML))
+}()
 
-//go:embed templates/investigation_history.html
+//go:embed assets/templates/diagnosisResult/investigation_history.html
 var investigationHistoryHTML string
+var investigationHistoryTmpl = func() *template.Template {
+	funcMap := template.FuncMap{
+		"generatedTime": func() string {
+			return time.Now().Format("2006-01-02 15:04:05")
+		},
+	}
+	return template.Must(template.New("investigation history html").Funcs(funcMap).Parse(investigationHistoryHTML))
+} ()
 
-//go:embed templates/investigation_report.css
+//go:embed assets/templates/diagnosisResult/investigation_report.css
 var investigationReportCSS string
 
-//go:embed templates/investigation_history.css
+//go:embed assets/templates/diagnosisResult/investigation_history.css
 var investigationHistoryCSS string
 
 // TODO:we dockerize our app
@@ -36,7 +53,7 @@ func generatePDF(htmlFileName string, template *template.Template, payload any, 
 	}
 
 	htmlFile.Close()
-	
+
 	pdf, err := os.CreateTemp(tempDir, "pdf-*.pdf")
 	if err != nil {
 		return "", err
@@ -62,4 +79,3 @@ func generatePDF(htmlFileName string, template *template.Template, payload any, 
 
 	return pdf.Name(), nil
 }
-

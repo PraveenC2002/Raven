@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/PraveenC2002/raven"
+	"github.com/PraveenC2002/raven/internal"
 )
 
 func main() {

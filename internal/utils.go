@@ -31,3 +31,12 @@ func ordinal(n int) string {
 	}
 }
 
+func agentToTransportErr(err *agentErr, sessionKey *tgSessionKey) *transportErr {
+	switch err.kind {
+		case agentErrFatal :
+			return newTransportErr(transportErrFatal, err.Unwrap(), nil)
+		case agentErrTerminate, agentErrLlmRetry :
+			return newTransportErr(transportErrClient, err.Unwrap(), sessionKey)
+	}
+	return nil
+}

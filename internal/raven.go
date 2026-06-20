@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/joho/godotenv"
+	"golang.org/x/sync/errgroup"
 )
 
 type ravenConfig struct {
@@ -88,7 +88,6 @@ func (r *raven) bootstrap() error {
 		return err
 	}
 	r.conf = ravenConf
-	// .conf done
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -100,17 +99,15 @@ func (r *raven) bootstrap() error {
 	if err != nil {
 		return err
 	}
-	// .db done
+	r.db = db
 
 	reg := &registry{
 		db: db,
 	}
 	r.registry = reg
-	// .registry done
 
 	lp := newVmLockProvider(r.registry.listVm)
 	r.vmLockProvider = lp
-	// .vmLockProvider done
 
 	tgUserId, err := r.registry.getUser()
 	if err != nil {
@@ -124,35 +121,30 @@ func (r *raven) bootstrap() error {
 	}, r.conf)
 
 	r.transports = []Transport{tgTransp}
-	// .transports done
 
 	return nil
 }
 
 func (r *raven) Run() error {
+	defer r.close()
 
-	ctx, cancel := context.WithCancel(r.ctx)
-	defer cancel()
-
-	wg := sync.WaitGroup{}
-
+	g, ctx := errgroup.WithContext(r.ctx)
+	
 	for _, t := range r.transports {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer t.close()
-			t.start(ctx)
-		}()
+		transport := t
+		g.Go(func() error {
+			return transport.start(ctx) // now transport can return any kind of error, we decide what to do... 
+			// returning error here is graceful shut down
+		})
 	}
 
-	wg.Wait()
-
-	return nil
+	return g.Wait()
 }
 
 func (r *raven) close() error {
 	if r.db != nil {
 		return r.db.Close()
 	}
+	os.RemoveAll(r.conf.tempDir)
 	return nil
 }

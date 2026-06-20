@@ -13,8 +13,8 @@ type RavenCLI interface {
 }
 
 type Transport interface {
-	start(ctx context.Context)
-	close()
+	start(ctx context.Context) *transportErr
+	// close()
 	// errors() <-chan *transportErr
 }
 
@@ -24,11 +24,6 @@ type LLM interface {
 	generate(context.Context, []*llmPart) (*llmMessage, *agentErr)
 }
 
-// type Bouncer interface {
-// 	validate(string) error
-// 	describe() (string, error)
-// }
-
 type LLMTool interface {
 	setUpdateEmitter(emitUpdate func(string))
 	getToolPolicy(toolName llmToolName) (string, error)
@@ -36,11 +31,6 @@ type LLMTool interface {
 	callTool(context.Context, *llmFunctionCall) (*llmFunctionResponse, *agentErr)
 	close() error // will always result in shutting down the system
 }
-
-// type RemoteSSH interface {
-// 	execute(string) (*sshOutput, error)
-// 	closeConn() error
-// }
 
 type Registry interface {
 	initUser(*owner) error

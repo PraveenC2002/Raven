@@ -4,13 +4,14 @@ import "time"
 
 // general
 
-type dockerContainerName string 
+type dockerContainerName string
 
 const (
 	ravenContainer dockerContainerName = "raven"
 )
 
 type dockerImageRef string
+
 const (
 	ravenImageAddr dockerImageRef = "" // TODO
 )
@@ -22,36 +23,32 @@ const (
 // networking
 const (
 	BaseRetryBackoffTime = 200 * time.Millisecond
-	MaxRetry             = 10
+	MaxRetry             = 5
 	MaxRetryTime         = 1000 * 10 * time.Millisecond
 )
 
 // Transport
-type transportErr struct {
-	kind   transportErrKind
-	err    error
-	chatId tgInt
-}
 
 type transportErrKind int
 
 const (
 	transportErrFatal transportErrKind = iota
-	transportErrLog
+	transportErrTerminate
 	transportErrClient
+	transportErrRetry
 )
 
 // tg transport
 
-type tgAPIUrltype string
+type tgAPIURLType string
 
 const (
-	tgAPIUrl tgAPIUrltype = "https://api.telegram.org/bot"
+	tgAPIUrl tgAPIURLType = "https://api.telegram.org/bot"
 )
 
 const (
 	pollTimeout      = 30
-	clientTimeout    = 35 * time.Second
+	clientTimeout    = 180 * time.Second
 	getMethodLimit   = 1
 	pollRetryBackoff = 5 * time.Second // TODO: Implement exponential backoff on tg transport
 )
@@ -59,17 +56,17 @@ const (
 type tgEndpoint string
 
 const (
-	tgEPGetUpdate              tgEndpoint = "getUpdate"
-	tgEPCreateThread           tgEndpoint = "createForumTopic"
-	tgEPSendMessage            tgEndpoint = "sendMessage"
-	tgEPSendDoc                tgEndpoint = "sendDocument"
-	tgEPEditMessageText        tgEndpoint = "editMessageText"
-	tgEPEditMessageReplyMarkup tgEndpoint = "editMessageReplyMarkup"
+	tgGetUpdateEP              tgEndpoint = "getUpdate"
+	tgCreateThreadEP           tgEndpoint = "createForumTopic"
+	tgSendNewMessageEP         tgEndpoint = "sendMessage"
+	tgSendDocEP                tgEndpoint = "sendDocument"
+	tgEditMessageTextEP        tgEndpoint = "editMessageText"
+	tgEditMessageReplyMarkupEP tgEndpoint = "editMessageReplyMarkup"
 )
 
 const (
-	pruneInterval = 5 * time.Second
-	sessionExpiry = 5 * 60 * time.Second
+	pruneInterval = 20 * time.Second
+	sessionExpiry = 3 * 60 * time.Second
 )
 
 // Session

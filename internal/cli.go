@@ -90,8 +90,6 @@ func setupCmd(r Registry) *cobra.Command {
 // ---------- CRUD CLI --------------
 func huhMachineForm(m *machine, action string) (bool, error) {
 
-	fmt.Printf("m = %#v\n", m.connectionInfo)
-	
 	nameInp := huh.NewInput().
 		Title("Name").
 		Description("must be unique").
@@ -705,6 +703,16 @@ func newLogsCmd() *cobra.Command {
 
 	runLogs := func(cmd *cobra.Command, args []string) error {
 
+		contRunning, err := dockerInspectRaven()
+		if err != nil {
+			return err
+		}
+
+		if !contRunning {
+			cmd.Println("raven daemon is not running")
+			return nil
+		}
+		
 		ctx, stop := signal.NotifyContext(
 			context.Background(),
 			os.Interrupt,

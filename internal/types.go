@@ -1,4 +1,5 @@
 package raven
+
 import (
 	"regexp"
 	"time"
@@ -25,7 +26,7 @@ type tgMessageEntity struct {
 	Length tgInt  `json:"length"`
 }
 
-type tgMessage struct {
+type tgUpdMessage struct {
 	MessageId       tgInt              `json:"message_id"`
 	MessageThreadId tgInt              `json:"message_thread_id,omitempty"`
 	From            *tgUser            `json:"from,omitempty"`
@@ -36,20 +37,20 @@ type tgMessage struct {
 }
 
 type tgCallBackQuery struct {
-	Id      string     `json:"id"`
-	From    *tgUser    `json:"from"`
-	Message *tgMessage `json:"message,omitempty"`
-	Data    string     `json:"data"`
+	Id      string        `json:"id"`
+	From    *tgUser       `json:"from"`
+	Message *tgUpdMessage `json:"message,omitempty"`
+	Data    string        `json:"data"`
 }
 
 type tgUpdate struct {
 	UpdateId      tgInt            `json:"update_id"`
-	Message       *tgMessage       `json:"message,omitempty"`
+	Message       *tgUpdMessage    `json:"message,omitempty"`
 	CallBackQuery *tgCallBackQuery `json:"callback_query,omitempty"`
 }
 
 type tgGetUpdateResponse struct {
-	*tgBaseResponse
+	tgBaseResponse
 	Result []*tgUpdate `json:"result"`
 }
 
@@ -64,31 +65,85 @@ type tgInlineKeyboardMarkup struct {
 	InlineKeyboard [][]*tgInlineKeyboardButton `json:"inline_keyboard"`
 }
 
-type tgSendMessage[T any] struct {
+type tgSendRequest interface {
+	endpoint() tgEndpoint
+	sessionKey() *tgSessionKey
+}
+
+type tgNewMessage struct {
+	reqEndpoint tgEndpoint
+	ChatId      tgInt                   `json:"chat_id"`
+	ThreadId    tgInt                   `json:"message_thread_id,omitempty"`
+	Text        string                  `json:"text"`
+	ParseMode   string                  `json:"parse_mode,omitempty"`
+	ReplyMarkup *tgInlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+func (nm *tgNewMessage) endpoint() tgEndpoint {
+	if nm.reqEndpoint != tgSendNewMessageEP {
+		return ""
+	}
+	return tgSendNewMessageEP
+}
+
+func (nm *tgNewMessage) sessionKey() *tgSessionKey {
+	return &tgSessionKey{
+		chatId:   nm.ChatId,
+		threadId: nm.ThreadId,
+	}
+}
+
+type tgEditMessage struct {
+	reqEndpoint tgEndpoint
+	threadId    tgInt
+	ChatId      tgInt                   `json:"chat_id,omitempty"`
+	MessageId   tgInt                   `json:"message_id,omitempty"`
+	Text        string                  `json:"text"`
+	ReplyMarkup *tgInlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+func (em *tgEditMessage) endpoint() tgEndpoint {
+	if em.ReplyMarkup == nil {
+		if em.reqEndpoint == tgEditMessageTextEP {
+			return tgEditMessageTextEP
+		}
+		return ""
+	} else if em.reqEndpoint != tgEditMessageReplyMarkupEP {
+		return ""
+	}
+	return tgEditMessageReplyMarkupEP
+}
+
+func (em *tgEditMessage) sessionKey() *tgSessionKey {
+	return &tgSessionKey{
+		chatId:   em.ChatId,
+		threadId: em.threadId,
+	}
+}
+
+type tgDocInfo struct {
+	reqEndpoint tgEndpoint
 	ChatId      tgInt  `json:"chat_id"`
-	ThreadId    tgInt  `json:"message_thread_id,omitempty"`
-	Text        string `json:"text"`
-	ParseMode   string `json:"parse_mode,omitempty"`
-	ReplyMarkup T      `json:"reply_markup,omitempty"`
+	ThreadId    tgInt  `json:"message_thread_id"`
+	Caption     string `json:"caption"`
 }
 
-type tgEditMessageText[T any] struct {
-	ChatId      tgInt  `json:"chat_id,omitempty"`
-	MessageId   tgInt  `json:"message_id,omitempty"`
-	Text        string `json:"text"`
-	ReplyMarkup T      `json:"reply_markup,omitempty"`
+func (di *tgDocInfo) endpoint() tgEndpoint {
+	if di.reqEndpoint != tgSendDocEP {
+		return ""
+	}
+	return tgSendDocEP
 }
-
-// TODO:Better name this
-type tgSendDoc struct {
-	ChatId   tgInt  `json:"chat_id"`
-	ThreadId tgInt  `json:"message_thread_id"`
-	Caption  string `json:"caption"`
+func (di *tgDocInfo) sessionKey() *tgSessionKey {
+	return &tgSessionKey{
+		chatId:   di.ChatId,
+		threadId: di.ThreadId,
+	}
 }
 
 type tgSendMessageResponse struct {
-	*tgBaseResponse
-	Result *tgMessage `json:"result"`
+	tgBaseResponse
+	Result *tgUpdMessage `json:"result"`
 }
 
 // ----------------- Base API interaction type --------------------------
@@ -206,8 +261,12 @@ type llmResponseErrors struct {
 	textUnmarshalErr string
 }
 
+type llmFinalResponse struct {
+	DiagnosisResult *diagnosisResult `json:"diagnosis_result"`
+}
+
 type llmResponse struct {
-	FinalResponse any
+	FinalResponse *llmFinalResponse `json:"final_response"`
 	clientErrors  *llmResponseErrors
 }
 
@@ -256,7 +315,7 @@ const (
 )
 
 type diagnosisReport struct {
-	*machine
+	// *machine
 	Summary   string `json:"summary"`
 	RootCause string `json:"root_cause"`
 	Evidence  []*struct {
@@ -264,7 +323,7 @@ type diagnosisReport struct {
 		Observation string         `json:"observation"`
 	} `json:"evidence"`
 	Recommendation   string                `json:"recommendation"`
-	Confidence       finalReportConfidence `json:"confidence"`
+	Confidence       finalReportConfidence `json:"confidence_level"`
 	ConfidenceReason string                `json:"confidence_reason"`
 }
 

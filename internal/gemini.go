@@ -158,7 +158,7 @@ var gemInvestigationHistorySchema = &genai.Schema{
 				Description: "A single investigation step containing one or more tool invocations.",
 				Properties: map[string]*genai.Schema{
 					"step_number": {
-						Type:        genai.TypeString,
+						Type:        genai.TypeInteger,
 						Description: "Sequential step number in the investigation timeline.",
 					},
 
@@ -245,25 +245,23 @@ type gemini struct {
 	client       *genai.Client
 	systemPrompt string
 	history      []*genai.Content
-	errDomain    string
 	ravenConf    *ravenConfig
 }
 
-func newGemini(ctx context.Context, systemPrompt string, apiKey string) (*gemini, error) {
+func newGemini(ctx context.Context, systemPrompt string, apiKey string) (*gemini, *agentErr) {
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(agentErrFatal, fmt.Errorf("gemini: new client: %w", err))
 	}
 
 	gemini := &gemini{
 		client:       client,
 		systemPrompt: systemPrompt,
 		history:      []*genai.Content{},
-		errDomain:    "llm error :",
 	}
 
 	return gemini, nil
@@ -389,22 +387,20 @@ func (g *gemini) handleError(err error) *agentErr {
 	var apiErr *genai.APIError
 
 	if errors.As(err, &apiErr) {
+
 		switch apiErr.Status {
-		// Fatal
+
 		case gemPermissionDenied, gemFailedPrecondition, gemInvalidArgument, gemNotFound:
-			err = fmt.Errorf("%s %s", g.errDomain, err.Error())
-			return newAgentError(agentErrFatal, err)
-		// retry
+			return newAgentError(agentErrFatal, fmt.Errorf("gemini: %w", err))
+
 		case gemResourceExhausted, gemInternalServerErr, gemUnavailable, gemDeadlineExceeded:
-			err = fmt.Errorf("%s %s", g.errDomain, err.Error())
-			return newAgentError(agentErrLlmRetry, err)
+			return newAgentError(agentErrLlmRetry, fmt.Errorf("gemini: %w", err))
+
 		default:
-			err = fmt.Errorf("%s unhandled API error status: %s", g.errDomain, err.Error())
-			return newAgentError(agentErrTerminate, err)
+			return newAgentError(agentErrTerminate, fmt.Errorf("gemini: unhandled api error status: %w", err))
 		}
 	}
-
-	return nil
+	return newAgentError(agentErrTerminate, fmt.Errorf("gemini: %w", err))
 }
 
 func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.GenerateContentResponse, *agentErr) {
@@ -428,7 +424,14 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.Ge
 			}
 		}
 
-		time.Sleep(min(t, MaxRetryTime))
+		sleep := min(t, MaxRetryTime)
+
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(sleep):
+		}
+
 		if t < MaxRetryTime {
 			t = BaseRetryBackoffTime * time.Duration((1 << (i + 1)))
 		}
@@ -467,12 +470,11 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 	g.history = contents
 
 	if len(resp.Candidates) == 0 {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("%s no response candidates returned", g.errDomain))
+		return nil, newAgentError(agentErrTerminate, fmt.Errorf("gemini: no response candidates"))
 	}
 
 	if len(resp.Candidates[0].FinishReason) != 0 && resp.Candidates[0].FinishReason != gemFinishReasonStop {
-		finishReason := resp.Candidates[0].FinishReason
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("%s %s", g.errDomain, finishReason))
+		return nil, newAgentError(agentErrTerminate, fmt.Errorf("gemini: unexpected finish reason: %s", resp.Candidates[0].FinishReason))
 	}
 
 	g.history = append(g.history, resp.Candidates[0].Content)

@@ -3,10 +3,19 @@ package raven
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"text/template"
 )
+
+//go:embed assets/templates/llm/sys_prompt.tmpl
+var llmSysPromptRaw string
+var llmSysPromptTmpl = template.Must(template.New("LLM system prompt").Parse(llmSysPromptRaw))
+
+//go:embed assets/templates/llm/query.tmpl
+var llmQueryRaw string
+var llmQueryTmpl = template.Must(template.New("llm query template").Parse(llmQueryRaw))
 
 type agentConf struct {
 	Machine *machine
@@ -18,23 +27,21 @@ type agent struct {
 	toolRegistry map[llmToolName]LLMTool
 	llm          LLM
 	updateCh     chan string
-	errDomain    string
 	ravenConf    *ravenConfig
 }
 
-func newAgent(ctx context.Context, agentConf *agentConf, ravenConf *ravenConfig) (*agent, error) {
+func newAgent(ctx context.Context, agentConf *agentConf, ravenConf *ravenConfig) (*agent, *agentErr) {
 
 	agent := &agent{
 		agentConf:    agentConf,
 		toolRegistry: make(map[llmToolName]LLMTool),
 		updateCh:     make(chan string, 20),
-		errDomain:    "agent error :",
-		ravenConf: ravenConf,
+		ravenConf:    ravenConf,
 	}
 
 	err := agent.bootStrap(ctx)
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(agentErrFatal, fmt.Errorf("agent: bootstrap: %w", err))
 	}
 
 	return agent, nil
@@ -59,8 +66,9 @@ func (a *agent) bootStrap(ctx context.Context) error {
 
 	remoteSSH, err := newRemoteSSH(&a.Machine.connectionInfo)
 	if err != nil {
-		return err
+		return newAgentError(err.kind, fmt.Errorf("init remote ssh: %w", err.Unwrap()))
 	}
+
 	tools = append(tools, &toolEntry{name: ToolExecuteSSH, tool: remoteSSH})
 
 	for _, t := range tools {
@@ -71,85 +79,20 @@ func (a *agent) bootStrap(ctx context.Context) error {
 	// get system prompt
 	sysPrompt, err := a.systemPrompt()
 	if err != nil {
-		return err
+		return fmt.Errorf("build system prompt: %w", err)
 	}
 
 	// setup llm
 	llm, err := newGemini(ctx, sysPrompt, a.ravenConf.geminiAPIKey)
 	if err != nil {
-		return err
+		return fmt.Errorf("init llm: %w", err)
 	}
 	a.llm = llm
 
 	return nil
 }
 
-func (a *agent) systemPrompt() (string, error) {
-
-	const systemPromptTemplate = `
-	You are Raven, an autonomous SRE diagnosis agent.
-	You have been deployed to diagnose a service running on a remote machine that is experiencing issues.
-	Your sole purpose is to diagnose the root cause.
-	You do not fix, modify, restart, or write anything — you only investigate and report.
-
-	---
-
-	Tool usage policy for all tools available:
-
-	{{range .ToolManifest}}
-
-	Tool Name : {{.Name}}
-	Tool Policy :
-	{{.Policy}}
-
-	{{end}}
-	---
-
-	## Diagnosis Methodology
-	Work systematically, layer by layer:
-
-	1. **Orient** — identify OS, distro, uptime, recent reboots
-	2. **Locate** — find the affected service, check its status
-	3. **Examine logs** — look for errors, panics, OOMs, segfaults
-	4. **Check resources** — disk space, memory, CPU pressure
-	5. **Check dependencies** — databases, upstream services, network connectivity
-	6. **Correlate** — connect findings to form a root cause hypothesis
-	7. **Verify** — confirm your hypothesis with one or two targeted commands before reporting
-
-	---
-
-	## Common Services
-	These machines typically run one or more of the following:
-
-	- **Next.js apps** — via PM2 or systemd, check process status and PM2 logs
-	- **Dockerized services** — check container status, resource usage, container logs
-	- **PostgreSQL / MySQL / Redis** — check service status, connection counts, error logs
-	- **Nginx** — reverse proxy and rate limiting, check error logs, config validity, upstream connectivity
-	- **Systemd services** — check unit status, journal logs
-	- **Node.js / Python backends** — check process status, application logs
-
-	---
-
-	## Reasoning
-	Before every tool call, explicitly state your reasoning. — what you know so far, what you suspect, and why this specific command advances the investigation. Do not run commands out of habit or checklist mentality. Every command must have a clear purpose given what you already know.
-
-	---
-
-	## Termination
-	Stop issuing commands when you have sufficient evidence to confidently explain the root cause. Do not over-investigate. If the root cause remains genuinely unclear after thorough investigation, report your best hypothesis with low confidence and the supporting evidence you found.
-
-	---
-
-	## Constraints
-	- Strictly read-only. Never attempt to modify, write, delete, move, or restart anything.
-	- Do not make assumptions — verify with commands.
-	- Do not retry a rejected command. Reason about an alternative approach.
-	`
-
-	tmpl, err := template.New("LLM system prompt").Parse(systemPromptTemplate)
-	if err != nil {
-		return "", err
-	}
+func (a *agent) systemPrompt() (string, *agentErr) {
 
 	var buf bytes.Buffer
 
@@ -164,7 +107,7 @@ func (a *agent) systemPrompt() (string, error) {
 
 		policy, err := t.getToolPolicy(name)
 		if err != nil {
-			return "", err
+			return "", newAgentError(agentErrFatal, err)
 		}
 
 		toolPolicies = append(toolPolicies,
@@ -175,34 +118,30 @@ func (a *agent) systemPrompt() (string, error) {
 		)
 	}
 
-	err = tmpl.Execute(&buf, struct {
+	err := llmSysPromptTmpl.Execute(&buf, struct {
 		ToolManifest []*toolManifest
 	}{
 		ToolManifest: toolPolicies,
 	})
 	if err != nil {
-		return "", err
+		return "", newAgentError(agentErrFatal, fmt.Errorf("execute system prompt template: %w", err))
 	}
 
 	return buf.String(), nil
 }
 
-func (a *agent) run(ctx context.Context) (any, *agentErr) {
-
-	// can panic if routine tries to send after closing, currently not a problem because everything is synchronous
-	// if in future operations becomes asynchronous handle this
-	defer close(a.updateCh)
+func (a *agent) run(ctx context.Context) (*llmFinalResponse, *agentErr) {
 
 	a.emitUpdate("Starting machine " + a.Machine.Name + " diagnosis.")
 
 	result, err := a.loop(ctx)
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("agent : %w", err.Unwrap()))
 	}
 
 	err = a.cleanUp()
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("agent : %w", err.Unwrap()))
 	}
 
 	a.emitUpdate("Finished machine diagnosis.")
@@ -212,26 +151,11 @@ func (a *agent) run(ctx context.Context) (any, *agentErr) {
 
 func (a *agent) query() (string, *agentErr) {
 
-	queryTemplate := `
-	Machine Information :
-		Machine name : {{.Machine.Name}}
-		Machine Description :
-			{{.Machine.Description}}
-	User Query :
-		{{.Query}}
-	`
-
-	tmpl, err := template.New("query template").Parse(queryTemplate)
-	if err != nil {
-		err = fmt.Errorf("%s query template parsing error.\nError : %s", a.errDomain, err.Error())
-		return "", newAgentError(agentErrFatal, err)
-	}
-
 	var buf bytes.Buffer
 
-	err = tmpl.Execute(&buf, a)
+	err := llmQueryTmpl.Execute(&buf, a)
 	if err != nil {
-		err = fmt.Errorf("%s query template execution error.\nError : %s", a.errDomain, err.Error())
+		err = fmt.Errorf("execute query template: %w", err)
 		return "", newAgentError(agentErrFatal, err)
 	}
 
@@ -242,7 +166,7 @@ func (a *agent) initialPrompt(ctx context.Context) (*llmMessage, *agentErr) {
 
 	promptStr, err := a.query()
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("construct query : %w", err.Unwrap()))
 	}
 
 	p := &llmPart{
@@ -253,7 +177,7 @@ func (a *agent) initialPrompt(ctx context.Context) (*llmMessage, *agentErr) {
 
 	resp, err := a.llm.generate(ctx, parts)
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("generate : %w", err.Unwrap()))
 	}
 
 	return resp, nil
@@ -273,7 +197,7 @@ func (a *agent) handleResponse(ctx context.Context, resp *llmMessage) ([]*llmFun
 	if len(funcs) != 0 {
 		FRs, err := a.executeFunctionCalls(ctx, funcs)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, newAgentError(err.kind, fmt.Errorf("execute function calls : %w", err.Unwrap()))
 		}
 		return FRs, nil, nil
 	}
@@ -285,14 +209,14 @@ func (a *agent) handleResponse(ctx context.Context, resp *llmMessage) ([]*llmFun
 		if unmarshalErr != nil {
 			response = &llmResponse{
 				clientErrors: &llmResponseErrors{
-					textUnmarshalErr: fmt.Sprintf("%s response unmarshal error.\nError : %s", a.errDomain, unmarshalErr.Error()),
+					textUnmarshalErr: fmt.Sprintf("response text unmarshal : %s", unmarshalErr.Error()),
 				},
 			}
 		}
 		return nil, response, nil
 	}
 
-	return nil, nil, newAgentError(agentErrTerminate, fmt.Errorf("%s received empty response from LLM", a.errDomain))
+	return nil, nil, newAgentError(agentErrTerminate, fmt.Errorf("empty LLM response"))
 }
 
 func (a *agent) getFunctionCalls(msg *llmMessage) []*llmFunctionCall {
@@ -323,7 +247,7 @@ func (a *agent) executeFunctionCalls(ctx context.Context, FCs []*llmFunctionCall
 		tool := a.toolRegistry[fc.Name]
 		res, err := tool.callTool(ctx, fc)
 		if err != nil {
-			return nil, err
+			return nil, newAgentError(err.kind, fmt.Errorf("tool call : %w", err.Unwrap()))
 		}
 
 		results = append(results, res)
@@ -334,16 +258,16 @@ func (a *agent) executeFunctionCalls(ctx context.Context, FCs []*llmFunctionCall
 }
 
 // TODO: Add max iteration bound
-func (a *agent) loop(ctx context.Context) (any, *agentErr) {
+func (a *agent) loop(ctx context.Context) (*llmFinalResponse, *agentErr) {
 
 	msg, err := a.initialPrompt(ctx)
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("initial prompt : %w", err.Unwrap()))
 	}
 
 	FRs, res, err := a.handleResponse(ctx, msg)
 	if err != nil {
-		return nil, err
+		return nil, newAgentError(err.kind, fmt.Errorf("initial prompt : %w", err.Unwrap()))
 	}
 
 	for res == nil || res.FinalResponse == nil {
@@ -365,17 +289,17 @@ func (a *agent) loop(ctx context.Context) (any, *agentErr) {
 		}
 
 		if len(parts) == 0 {
-			return nil, newAgentError(agentErrTerminate, fmt.Errorf("%s zero parts to send. Empty LLM response", a.errDomain))
+			return nil, newAgentError(agentErrTerminate, fmt.Errorf("empty llm response, no parts to send"))
 		}
 
 		msg, err = a.llm.generate(ctx, parts)
 		if err != nil {
-			return nil, err
+			return nil, newAgentError(err.kind, fmt.Errorf("generate : %w", err.Unwrap()))
 		}
 
 		FRs, res, err = a.handleResponse(ctx, msg)
 		if err != nil {
-			return nil, err
+			return nil, newAgentError(err.kind, fmt.Errorf("handle response : %w", err.Unwrap()))
 		}
 	}
 
@@ -397,13 +321,21 @@ func (a *agent) cleanUp() *agentErr {
 		}
 	}
 
+	var cleanupErr error
 	if len(errs) != 0 {
-		errStr := fmt.Sprintf("%s error while agent cleanup\n", a.errDomain)
 		for _, err := range errs {
-			errStr = errStr + fmt.Sprintf("Error : %s\n", err.Error())
+			if cleanupErr == nil {
+				cleanupErr = fmt.Errorf("tool registry cleanup : %w", err)
+			} else {
+				cleanupErr = fmt.Errorf("%w %w", cleanupErr, err)
+			}
 		}
-		return newAgentError(agentErrFatal, fmt.Errorf("%s", errStr))
+		return newAgentError(agentErrFatal, fmt.Errorf("%s", cleanupErr))
 	}
+
+	// can panic if routine tries to send after closing, currently not a problem because everything is synchronous
+	// if in future operations becomes asynchronous handle this
+	close(a.updateCh)
 
 	return nil
 }
@@ -426,4 +358,12 @@ func newAgentError(kind agentError, err error) *agentErr {
 		kind: kind,
 		err:  err,
 	}
+}
+
+func (e *agentErr) Error() string {
+	return e.err.Error()
+}
+
+func (e *agentErr) Unwrap() error {
+	return e.err
 }
