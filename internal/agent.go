@@ -41,13 +41,13 @@ func newAgent(ctx context.Context, agentConf *agentConf, ravenConf *ravenConfig)
 
 	err := agent.bootStrap(ctx)
 	if err != nil {
-		return nil, newAgentError(agentErrFatal, fmt.Errorf("agent: bootstrap: %w", err))
+		return nil, err.Wrap("agent: bootstrap: ")
 	}
 
 	return agent, nil
 }
 
-func (a *agent) bootStrap(ctx context.Context) error {
+func (a *agent) bootStrap(ctx context.Context) *agentErr {
 
 	// Init tool registry
 	emitToolUpdate := func(upd string) {
@@ -66,7 +66,7 @@ func (a *agent) bootStrap(ctx context.Context) error {
 
 	remoteSSH, err := newRemoteSSH(&a.Machine.connectionInfo)
 	if err != nil {
-		return newAgentError(err.kind, fmt.Errorf("init remote ssh: %w", err.Unwrap()))
+		return err.Wrap("init remote ssh: ")
 	}
 
 	tools = append(tools, &toolEntry{name: ToolExecuteSSH, tool: remoteSSH})
@@ -76,23 +76,17 @@ func (a *agent) bootStrap(ctx context.Context) error {
 		a.toolRegistry[t.name] = t.tool
 	}
 
-	// get system prompt
-	sysPrompt, err := a.systemPrompt()
-	if err != nil {
-		return fmt.Errorf("build system prompt: %w", err)
-	}
-
 	// setup llm
-	llm, err := newGemini(ctx, sysPrompt, a.ravenConf.geminiAPIKey)
+	llm, err := newGemini(ctx, a.ravenConf.geminiAPIKey)
 	if err != nil {
-		return fmt.Errorf("init llm: %w", err)
+		return err.Wrap("init llm: ")
 	}
 	a.llm = llm
 
 	return nil
 }
 
-func (a *agent) systemPrompt() (string, *agentErr) {
+func (a *agent) systemPrompt(currIter int) (string, *agentErr) {
 
 	var buf bytes.Buffer
 
@@ -107,7 +101,7 @@ func (a *agent) systemPrompt() (string, *agentErr) {
 
 		policy, err := t.getToolPolicy(name)
 		if err != nil {
-			return "", newAgentError(agentErrFatal, err)
+			return "", &agentErr{kind: agentErrFatal, err: err}
 		}
 
 		toolPolicies = append(toolPolicies,
@@ -119,12 +113,19 @@ func (a *agent) systemPrompt() (string, *agentErr) {
 	}
 
 	err := llmSysPromptTmpl.Execute(&buf, struct {
-		ToolManifest []*toolManifest
+		MaxIterations       int
+		CurrentIteration    int
+		RemainingIterations int
+		ToolManifest        []*toolManifest
 	}{
-		ToolManifest: toolPolicies,
+		MaxIterations:       agentMaxIterations,
+		CurrentIteration:    currIter,
+		RemainingIterations: agentMaxIterations - currIter,
+		ToolManifest:        toolPolicies,
 	})
+
 	if err != nil {
-		return "", newAgentError(agentErrFatal, fmt.Errorf("execute system prompt template: %w", err))
+		return "", &agentErr{kind: agentErrFatal, err: fmt.Errorf("execute system prompt template: %w", err)}
 	}
 
 	return buf.String(), nil
@@ -136,12 +137,12 @@ func (a *agent) run(ctx context.Context) (*llmFinalResponse, *agentErr) {
 
 	result, err := a.loop(ctx)
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("agent : %w", err.Unwrap()))
+		return nil, err.Wrap("agent : ")
 	}
 
 	err = a.cleanUp()
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("agent : %w", err.Unwrap()))
+		return nil, err.Wrap("agent : ")
 	}
 
 	a.emitUpdate("Finished machine diagnosis.")
@@ -156,7 +157,7 @@ func (a *agent) query() (string, *agentErr) {
 	err := llmQueryTmpl.Execute(&buf, a)
 	if err != nil {
 		err = fmt.Errorf("execute query template: %w", err)
-		return "", newAgentError(agentErrFatal, err)
+		return "", &agentErr{kind: agentErrFatal, err: err}
 	}
 
 	return buf.String(), nil
@@ -166,7 +167,7 @@ func (a *agent) initialPrompt(ctx context.Context) (*llmMessage, *agentErr) {
 
 	promptStr, err := a.query()
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("construct query : %w", err.Unwrap()))
+		return nil, err.Wrap("construct query : ")
 	}
 
 	p := &llmPart{
@@ -175,9 +176,14 @@ func (a *agent) initialPrompt(ctx context.Context) (*llmMessage, *agentErr) {
 
 	parts := []*llmPart{p}
 
-	resp, err := a.llm.generate(ctx, parts)
+	sysPromptStr, err := a.systemPrompt(1)
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("generate : %w", err.Unwrap()))
+		return nil, err
+	}
+
+	resp, err := a.llm.generate(ctx, parts, sysPromptStr)
+	if err != nil {
+		return nil, err.Wrap("generate : ")
 	}
 
 	return resp, nil
@@ -197,7 +203,7 @@ func (a *agent) handleResponse(ctx context.Context, resp *llmMessage) ([]*llmFun
 	if len(funcs) != 0 {
 		FRs, err := a.executeFunctionCalls(ctx, funcs)
 		if err != nil {
-			return nil, nil, newAgentError(err.kind, fmt.Errorf("execute function calls : %w", err.Unwrap()))
+			return nil, nil, err.Wrap("execute function calls : ")
 		}
 		return FRs, nil, nil
 	}
@@ -216,7 +222,7 @@ func (a *agent) handleResponse(ctx context.Context, resp *llmMessage) ([]*llmFun
 		return nil, response, nil
 	}
 
-	return nil, nil, newAgentError(agentErrTerminate, fmt.Errorf("empty LLM response"))
+	return nil, nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("empty LLM response")}
 }
 
 func (a *agent) getFunctionCalls(msg *llmMessage) []*llmFunctionCall {
@@ -247,7 +253,7 @@ func (a *agent) executeFunctionCalls(ctx context.Context, FCs []*llmFunctionCall
 		tool := a.toolRegistry[fc.Name]
 		res, err := tool.callTool(ctx, fc)
 		if err != nil {
-			return nil, newAgentError(err.kind, fmt.Errorf("tool call : %w", err.Unwrap()))
+			return nil, err.Wrap("tool call : ")
 		}
 
 		results = append(results, res)
@@ -262,13 +268,15 @@ func (a *agent) loop(ctx context.Context) (*llmFinalResponse, *agentErr) {
 
 	msg, err := a.initialPrompt(ctx)
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("initial prompt : %w", err.Unwrap()))
+		return nil, err.Wrap("initial prompt : ")
 	}
 
 	FRs, res, err := a.handleResponse(ctx, msg)
 	if err != nil {
-		return nil, newAgentError(err.kind, fmt.Errorf("initial prompt : %w", err.Unwrap()))
+		return nil, err.Wrap("initial prompt : ")
 	}
+
+	currentIter := 2
 
 	for res == nil || res.FinalResponse == nil {
 
@@ -289,17 +297,37 @@ func (a *agent) loop(ctx context.Context) (*llmFinalResponse, *agentErr) {
 		}
 
 		if len(parts) == 0 {
-			return nil, newAgentError(agentErrTerminate, fmt.Errorf("empty llm response, no parts to send"))
+			return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("empty llm response, no parts to send")}
 		}
 
-		msg, err = a.llm.generate(ctx, parts)
+		sysPromptStr, err := a.systemPrompt(currentIter)
 		if err != nil {
-			return nil, newAgentError(err.kind, fmt.Errorf("generate : %w", err.Unwrap()))
+			return nil, err
+		}
+
+		msg, err = a.llm.generate(ctx, parts, sysPromptStr)
+		if err != nil {
+			return nil, err.Wrap("generate : ")
 		}
 
 		FRs, res, err = a.handleResponse(ctx, msg)
 		if err != nil {
-			return nil, newAgentError(err.kind, fmt.Errorf("handle response : %w", err.Unwrap()))
+			return nil, err.Wrap("handle response : ")
+		}
+		currentIter++
+		if currentIter > agentMaxIterations {
+			break
+		}
+	}
+
+	if currentIter > agentMaxIterations {
+		return res.FinalResponse, &agentErr{
+			kind: agentErrTerminate,
+			err: fmt.Errorf(
+				"%w: limit=%d",
+				agentErrMaxIterationsExceeded,
+				agentMaxIterations,
+			),
 		}
 	}
 
@@ -330,7 +358,7 @@ func (a *agent) cleanUp() *agentErr {
 				cleanupErr = fmt.Errorf("%w %w", cleanupErr, err)
 			}
 		}
-		return newAgentError(agentErrFatal, fmt.Errorf("%s", cleanupErr))
+		return &agentErr{kind: agentErrFatal, err: fmt.Errorf("%s", cleanupErr)}
 	}
 
 	// can panic if routine tries to send after closing, currently not a problem because everything is synchronous
@@ -353,12 +381,12 @@ type agentErr struct {
 	err  error
 }
 
-func newAgentError(kind agentError, err error) *agentErr {
-	return &agentErr{
-		kind: kind,
-		err:  err,
-	}
-}
+// func newAgentError(kind agentError, err error) *agentErr {
+// 	return &agentErr{
+// 		kind: kind,
+// 		err:  err,
+// 	}
+// }
 
 func (e *agentErr) Error() string {
 	return e.err.Error()
@@ -366,4 +394,11 @@ func (e *agentErr) Error() string {
 
 func (e *agentErr) Unwrap() error {
 	return e.err
+}
+
+func (e *agentErr) Wrap(msg string) *agentErr {
+	return &agentErr{
+		kind: e.kind,
+		err:  fmt.Errorf("%s %w", msg, e.err),
+	}
 }

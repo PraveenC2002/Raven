@@ -10,7 +10,7 @@ type vmLockProvider struct {
 	vmMap    map[string]*sync.Mutex
 }
 
-func newVmLockProvider(getAllVms func() ([]*machine, error)) *vmLockProvider {
+func newVmLockProvider(getAllVms func() ([]*machine, error)) (*vmLockProvider, error) {
 
 	lp := &vmLockProvider{
 		getAllVm: getAllVms,
@@ -18,7 +18,11 @@ func newVmLockProvider(getAllVms func() ([]*machine, error)) *vmLockProvider {
 		vmMap: make(map[string]*sync.Mutex),
 	}
 
-	return lp
+	if err := lp.bootstrap(); err != nil {
+		return nil, err
+	}
+
+	return lp, nil
 }
 
 func (lp *vmLockProvider) bootstrap() error {

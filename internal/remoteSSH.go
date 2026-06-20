@@ -33,19 +33,19 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, *agentErr) {
 
 	pvKey, err := os.ReadFile(connInfo.KeyPath)
 	if err != nil {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("remote ssh: read private key %q: %w", connInfo.KeyPath, err))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("remote ssh: read private key %q: %w", connInfo.KeyPath, err)}
 	}
 
 	signer, err := ssh.ParsePrivateKey(pvKey)
 	if err != nil {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("remote ssh: parse private key: %w", err))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("remote ssh: parse private key: %w", err)}
 	}
 
 	authMethod := ssh.PublicKeys(signer)
 
 	hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(connInfo.HostKey))
 	if err != nil {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("remote ssh: parse host key: %w", err))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("remote ssh: parse host key: %w", err)}
 	}
 
 	hostKeyCallBack := ssh.FixedHostKey(hostKey)
@@ -61,12 +61,12 @@ func newRemoteSSH(connInfo *connectionInfo) (*remoteSSH, *agentErr) {
 
 	client, err := ssh.Dial("tcp", addr, &clientConf)
 	if err != nil {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("remote ssh: dial %s: %w", addr, err))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("remote ssh: dial %s: %w", addr, err)}
 	}
 
 	bouncer, err := newSSHBouncer()
 	if err != nil {
-		return nil, newAgentError(agentErrFatal, fmt.Errorf("remote ssh: init bouncer: %w", err))
+		return nil, &agentErr{kind: agentErrFatal, err: fmt.Errorf("remote ssh: init bouncer: %w", err)}
 	}
 
 	return &remoteSSH{
@@ -228,20 +228,20 @@ func (r *remoteSSH) callTool(ctx context.Context, fc *llmFunctionCall) (*llmFunc
 	cmd, err := r.bouncer.constructCmd(fcObj)
 	if err != nil {
 		err = fmt.Errorf("remote ssh: construct command: %w", err)
-		return nil, newAgentError(agentErrTerminate, err)
+		return nil, &agentErr{kind: agentErrTerminate, err: err}
 	}
 
 	out, err := r.execute(ctx, cmd)
 	if err != nil {
 		err = fmt.Errorf("remote ssh: execute %q: %w", cmd, err)
-		return nil, newAgentError(agentErrTerminate, err)
+		return nil, &agentErr{kind: agentErrTerminate, err: err}
 	}
 
 	var buf bytes.Buffer
 	err = sshOutputTmpl.Execute(&buf, out)
 	if err != nil {
 		err = fmt.Errorf("remote ssh: execute output template: %w", err)
-		return nil, newAgentError(agentErrFatal, err)
+		return nil, &agentErr{kind: agentErrFatal, err: err}
 	}
 
 	r.emitUpdate("returing shell command output")

@@ -108,7 +108,7 @@ func (r *registry) getVm(name string) (*machine, error) {
 	m := &machine{}
 	err := row.Scan(&m.Id, &m.Name, &m.Description, &m.CreatedAt, &m.Host, &m.Port, &m.SshUser, &m.KeyPath, &m.HostKey)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("no machine with name %s found", name)
+		return nil, fmt.Errorf("no machine with name %s found %w", name, sql.ErrNoRows)
 	}
 	if err != nil {
 		return nil, err

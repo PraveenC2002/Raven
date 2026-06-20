@@ -12,7 +12,6 @@ import (
 )
 
 type ravenConfig struct {
-	tgURL        string
 	tgBotToken   string
 	geminiAPIKey string
 	tempDir      string
@@ -33,11 +32,6 @@ func loadRavenConfig() (*ravenConfig, error) {
 	_ = godotenv.Load(filepath.Join(ravenPath, ".env"))
 
 	conf := &ravenConfig{}
-
-	conf.tgURL = os.Getenv("TG_URL")
-	if len(conf.tgURL) == 0 {
-		return nil, fmt.Errorf("invalid telegram url")
-	}
 
 	conf.tgBotToken = os.Getenv("TG_BOT_TOKEN")
 	if len(conf.tgBotToken) == 0 {
@@ -106,7 +100,10 @@ func (r *raven) bootstrap() error {
 	}
 	r.registry = reg
 
-	lp := newVmLockProvider(r.registry.listVm)
+	lp, err := newVmLockProvider(r.registry.listVm)
+	if err != nil {
+		return err
+	}
 	r.vmLockProvider = lp
 
 	tgUserId, err := r.registry.getUser()
@@ -118,6 +115,7 @@ func (r *raven) bootstrap() error {
 		userId:         *tgUserId,
 		botToken:       r.conf.tgBotToken,
 		vmLockProvider: r.vmLockProvider,
+		registry: reg,
 	}, r.conf)
 
 	r.transports = []Transport{tgTransp}
@@ -129,11 +127,11 @@ func (r *raven) Run() error {
 	defer r.close()
 
 	g, ctx := errgroup.WithContext(r.ctx)
-	
+
 	for _, t := range r.transports {
 		transport := t
 		g.Go(func() error {
-			return transport.start(ctx) // now transport can return any kind of error, we decide what to do... 
+			return transport.start(ctx) // now transport can return any kind of error, we decide what to do...
 			// returning error here is graceful shut down
 		})
 	}

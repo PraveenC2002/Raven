@@ -1,6 +1,9 @@
 package raven
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // general
 
@@ -56,7 +59,7 @@ const (
 type tgEndpoint string
 
 const (
-	tgGetUpdateEP              tgEndpoint = "getUpdate"
+	tgGetUpdateEP              tgEndpoint = "getUpdates"
 	tgCreateThreadEP           tgEndpoint = "createForumTopic"
 	tgSendNewMessageEP         tgEndpoint = "sendMessage"
 	tgSendDocEP                tgEndpoint = "sendDocument"
@@ -83,7 +86,7 @@ const (
 type tgEntity string
 
 const (
-	tgEntityCmd tgEntity = "command"
+	tgEntityCmd tgEntity = "bot_command"
 )
 
 type tgCmd string
@@ -106,6 +109,12 @@ const (
 	agentErrTerminate
 	agentErrLlmRetry
 )
+
+const (
+	agentMaxIterations = 15
+)
+
+var agentErrMaxIterationsExceeded = errors.New("maximum iterations exceeded")
 
 type llmToolName string
 

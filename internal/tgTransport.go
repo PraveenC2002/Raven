@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -108,6 +110,7 @@ func (t *tgTransport) pushToChannel(ctx context.Context, payload any) {
 
 func (t *tgTransport) poll(ctx context.Context) {
 
+	log.Println("started polling")
 	for {
 
 		params := url.Values{}
@@ -121,27 +124,26 @@ func (t *tgTransport) poll(ctx context.Context) {
 		if err != nil {
 			t.pushToChannel(
 				ctx,
-				newTransportErr(
-					transportErrFatal,
-					fmt.Errorf("transport poll: create getUpdates request: %w", err),
-					nil,
-				),
+				&transportErr{
+					kind: transportErrFatal,
+					err:  fmt.Errorf("transport poll: create getUpdates request: %w", err),
+				},
 			)
 			return
 		}
 
+		log.Printf("sent long poll")
 		res, err := t.client.Do(req)
 		if err != nil {
 
-			if ctx.Err() != nil { // TODO: check this, we normally return nil on context cancellation
-				// t.pushToChannel(
-				// 	ctx,
-				// 	newTransportErr(
-				// 		transportErrTerminate,
-				// 		fmt.Errorf("transport poll: %w", ctx.Err()),
-				// 		nil,
-				// 	),
-				// )
+			if ctx.Err() != nil {
+				t.pushToChannel(
+					ctx,
+					&transportErr{
+						kind: transportErrTerminate,
+						err:  fmt.Errorf("transport poll: %w", ctx.Err()),
+					},
+				)
 				return
 			} else {
 				time.Sleep(pollRetryBackoff) // backoff
@@ -160,11 +162,10 @@ func (t *tgTransport) poll(ctx context.Context) {
 		if err != nil {
 			t.pushToChannel(
 				ctx,
-				newTransportErr(
-					transportErrTerminate,
-					fmt.Errorf("transport poll: unmarshal getUpdates response: %w", err),
-					nil,
-				),
+				&transportErr{
+					kind: transportErrTerminate,
+					err:  fmt.Errorf("transport poll: unmarshal getUpdates response: %w", err),
+				},
 			)
 			return
 		}
@@ -183,19 +184,26 @@ func (t *tgTransport) poll(ctx context.Context) {
 				switch {
 
 				case upd.Message != nil:
-
 					msg := upd.Message
+
+					if msg.From.IsBot {
+						log.Printf("bot package")
+						continue
+					}
 					if err := t.authenticate(msg.From.Id); err != nil {
+						log.Printf("auth failed your id : %d ownerId : %d", msg.From.Id, t.userId)
 						continue
 					}
 
 					t.pushToChannel(ctx, msg)
+					log.Printf("pushed messaged : %s", msg.Text)
 
 				case upd.CallBackQuery != nil:
 
 					cb := upd.CallBackQuery
 
 					if err := t.authenticate(cb.From.Id); err != nil {
+						log.Printf("auth failed your id : %d ownerId : %d", cb.From.Id, t.userId)
 						continue
 					}
 
@@ -211,37 +219,32 @@ func (t *tgTransport) doRequest(ctx context.Context, req *http.Request, out any)
 	res, err := t.client.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return newTransportErr(
-				transportErrTerminate,
-				fmt.Errorf("transport do request: %w", ctx.Err()),
-				nil,
-			)
-			// return nil
+			return &transportErr{
+				kind: transportErrTerminate,
+				err:  fmt.Errorf("transport do request: %w", ctx.Err()),
+			}
 		}
 
-		return newTransportErr(
-			transportErrRetry,
-			fmt.Errorf("transport do request: execute request: %w", err),
-			nil,
-		)
+		return &transportErr{
+			kind: transportErrRetry,
+			err:  fmt.Errorf("transport do request: execute request: %w", err),
+		}
 	}
 	defer res.Body.Close()
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return newTransportErr(
-			transportErrRetry,
-			fmt.Errorf("transport do request: read response body: %w", err),
-			nil,
-		)
+		return &transportErr{
+			kind: transportErrRetry,
+			err:  fmt.Errorf("transport do request: read response body: %w", err),
+		}
 	}
 
 	if err := json.Unmarshal(body, out); err != nil {
-		return newTransportErr(
-			transportErrFatal,
-			fmt.Errorf("transport do request: unmarshal response body: %w", err),
-			nil,
-		)
+		return &transportErr{
+			kind: transportErrFatal,
+			err:  fmt.Errorf("transport do request: unmarshal response body: %w", err),
+		}
 	}
 
 	return nil
@@ -258,15 +261,14 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 		Name:   name,
 	})
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport create thread: marshal request for thread %q: %w",
 				name,
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -276,15 +278,14 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 		bytes.NewReader(payload),
 	)
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport create thread: build request for thread %q: %w",
 				name,
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -299,27 +300,18 @@ func (t *tgTransport) newThread(ctx context.Context, chatId tgInt, name string) 
 	var res response
 
 	if err := t.doRequest(ctx, req, &res); err != nil {
-		return nil, newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport create thread: execute request for thread %q: %w",
-				name,
-				err.Unwrap(),
-			),
-			nil,
-		)
+		return nil, err.Wrap(fmt.Sprintf("transport create thread: execute request for thread: %q", name))
 	}
 
 	if !res.Ok {
-		return nil, newTransportErr(
-			transportErrRetry,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrRetry,
+			err: fmt.Errorf(
 				"transport create thread: telegram rejected thread %q: %s",
 				name,
 				res.Description,
 			),
-			nil,
-		)
+		}
 	}
 
 	threadID := res.Result.MessageThreadId
@@ -347,7 +339,10 @@ func (t *tgTransport) createThreadWithRetry(ctx context.Context, chatId tgInt, n
 
 		select {
 		case <-ctx.Done():
-			return nil, nil
+			return nil, &transportErr{
+				kind: transportErrTerminate,
+				err:  ctx.Err(),
+			}
 
 		case <-time.After(sleep):
 		}
@@ -359,15 +354,18 @@ func (t *tgTransport) createThreadWithRetry(ctx context.Context, chatId tgInt, n
 	}
 
 	if err != nil && err.kind == transportErrRetry {
-		err = newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		err = &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"transport create thread with retry: exhausted retries for thread %q: %w",
 				name,
 				err.Unwrap(),
 			),
-			nil,
-		)
+			sessionKey: &tgSessionKey{
+				chatId: chatId,
+			},
+			clientMsg: fmt.Sprintf("failed to create %s thread", name),
+		}
 	}
 
 	return threadID, err
@@ -378,27 +376,25 @@ func (t *tgTransport) send(ctx context.Context, msg tgSendRequest) (*tgSendMessa
 
 	ep := msg.endpoint()
 	if len(ep) == 0 {
-		return nil, newTransportErr(
-			transportErrTerminate,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrTerminate,
+			err: fmt.Errorf(
 				"transport send: misconfigured endpoint for type %v",
 				reflect.TypeOf(msg),
 			),
-			nil,
-		)
+		}
 	}
 
 	payload, err := json.Marshal(msg)
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send: marshal request for endpoint %q: %w",
 				ep,
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -408,15 +404,14 @@ func (t *tgTransport) send(ctx context.Context, msg tgSendRequest) (*tgSendMessa
 		bytes.NewReader(payload),
 	)
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send: build request for endpoint %q: %w",
 				ep,
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -424,27 +419,18 @@ func (t *tgTransport) send(ctx context.Context, msg tgSendRequest) (*tgSendMessa
 	var res tgSendMessageResponse
 
 	if err := t.doRequest(ctx, req, &res); err != nil {
-		return nil, newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport send: execute request for endpoint %q: %w",
-				ep,
-				err.Unwrap(),
-			),
-			nil,
-		)
+		return nil, err.Wrap(fmt.Sprintf("transport send: execute request for endpoint %q:", ep))
 	}
 
 	if !res.Ok {
-		return nil, newTransportErr(
-			transportErrRetry,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrRetry,
+			err: fmt.Errorf(
 				"transport send: telegram rejected request for endpoint %q: %s",
 				ep,
 				res.Description,
 			),
-			nil,
-		)
+		}
 	}
 
 	return &res, nil
@@ -470,7 +456,10 @@ func (t *tgTransport) sendMessageWithRetry(ctx context.Context, payload tgSendRe
 		sleep := min(rtime, MaxRetryTime)
 		select {
 		case <-ctx.Done():
-			return nil, nil
+			return nil, &transportErr{
+				kind: transportErrTerminate,
+				err:  ctx.Err(),
+			}
 		case <-time.After(sleep):
 		}
 
@@ -480,15 +469,16 @@ func (t *tgTransport) sendMessageWithRetry(ctx context.Context, payload tgSendRe
 	}
 
 	if err != nil && err.kind == transportErrRetry {
-		err = newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		err = &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"transport send with retry: exhausted retries for endpoint %q: %w",
 				payload.endpoint(),
 				err.Unwrap(),
 			),
-			payload.sessionKey(),
-		)
+			sessionKey: payload.sessionKey(),
+			clientMsg:  "can't deliver message",
+		}
 	}
 
 	return res, err
@@ -504,14 +494,13 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 		"chat_id",
 		strconv.Itoa(int(doc.ChatId)),
 	); err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send document: write chat_id field: %w",
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	if doc.ThreadId != 0 {
@@ -519,14 +508,13 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 			"message_thread_id",
 			strconv.Itoa(int(doc.ThreadId)),
 		); err != nil {
-			return nil, newTransportErr(
-				transportErrFatal,
-				fmt.Errorf(
+			return nil, &transportErr{
+				kind: transportErrFatal,
+				err: fmt.Errorf(
 					"transport send document: write thread id field: %w",
 					err,
 				),
-				nil,
-			)
+			}
 		}
 	}
 
@@ -535,14 +523,13 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 			"caption",
 			doc.Caption,
 		); err != nil {
-			return nil, newTransportErr(
-				transportErrFatal,
-				fmt.Errorf(
+			return nil, &transportErr{
+				kind: transportErrFatal,
+				err: fmt.Errorf(
 					"transport send document: write caption field: %w",
 					err,
 				),
-				nil,
-			)
+			}
 		}
 	}
 
@@ -551,38 +538,35 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 		filepath.Base(pdf.Name()),
 	)
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send document: create multipart file part for %q: %w",
 				pdf.Name(),
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	if _, err := io.Copy(part, pdf); err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send document: copy pdf %q into multipart body: %w",
 				pdf.Name(),
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	if err := writer.Close(); err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send document: finalize multipart body: %w",
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(
@@ -592,15 +576,14 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 		&body,
 	)
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err: fmt.Errorf(
 				"transport send document: build request for %q: %w",
 				pdf.Name(),
 				err,
 			),
-			nil,
-		)
+		}
 	}
 
 	req.Header.Set(
@@ -611,27 +594,18 @@ func (t *tgTransport) sendDocument(ctx context.Context, doc *tgDocInfo, pdf *os.
 	var res tgSendMessageResponse
 
 	if err := t.doRequest(ctx, req, &res); err != nil {
-		return nil, newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport send document: execute request for %q: %w",
-				pdf.Name(),
-				err.Unwrap(),
-			),
-			nil,
-		)
+		return nil, err.Wrap(fmt.Sprintf("transport send document: execute request for %q:", pdf.Name()))
 	}
 
 	if !res.Ok {
-		return nil, newTransportErr(
-			transportErrRetry,
-			fmt.Errorf(
+		return nil, &transportErr{
+			kind: transportErrRetry,
+			err: fmt.Errorf(
 				"transport send document: telegram rejected document %q: %s",
 				pdf.Name(),
 				res.Description,
 			),
-			nil,
-		)
+		}
 	}
 
 	return &res, nil
@@ -650,15 +624,19 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 
 		_, fErr := file.Seek(0, 0)
 		if fErr != nil {
-			return nil, newTransportErr(
-				transportErrClient,
-				fmt.Errorf(
+			return nil, &transportErr{
+				kind: transportErrClient,
+				err: fmt.Errorf(
 					"transport send document with retry: rewind file %q: %w",
 					file.Name(),
 					fErr,
 				),
-				nil,
-			)
+				sessionKey: &tgSessionKey{
+					chatId:   d.ChatId,
+					threadId: d.ThreadId,
+				},
+				clientMsg: fmt.Sprintf("failed to deliver document %s", filepath.Base(file.Name())),
+			}
 		}
 
 		res, err = t.sendDocument(ctx, d, file)
@@ -670,7 +648,10 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 		sleep := min(rtime, MaxRetryTime)
 		select {
 		case <-ctx.Done():
-			return nil, nil
+			return nil, &transportErr{
+				kind: transportErrTerminate,
+				err:  ctx.Err(),
+			}
 		case <-time.After(sleep):
 		}
 
@@ -680,15 +661,19 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 	}
 
 	if err != nil && err.kind == transportErrRetry {
-		err = newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		err = &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"transport send document with retry: exhausted retries for %q: %w",
 				file.Name(),
 				err.Unwrap(),
 			),
-			nil,
-		)
+			sessionKey: &tgSessionKey{
+				chatId:   d.ChatId,
+				threadId: d.ThreadId,
+			},
+			clientMsg: fmt.Sprintf("failed to deliver document %s", filepath.Base(file.Name())),
+		}
 	}
 
 	return res, err
@@ -731,17 +716,13 @@ func (t *tgTransport) start(ctx context.Context) *transportErr {
 			}
 			err = t.handleError(transportCtx, err)
 			if err != nil {
-				return newTransportErr(
-					err.kind,
-					fmt.Errorf(
-						"transport start: handle transport error: %w",
-						err.Unwrap(),
-					),
-					err.sessionKey,
-				)
+				return err.Wrap("transport start: handle transport error:")
 			}
 		case <-transportCtx.Done():
-			return nil
+			return &transportErr{
+				kind: transportErrTerminate,
+				err:  transportCtx.Err(),
+			}
 		}
 	}
 }
@@ -795,15 +776,7 @@ func (t *tgTransport) handleMessage(ctx context.Context, msg *tgUpdMessage) *tra
 	t.sessionMapLock.Unlock()
 
 	if err := sess.msgRouter(ctx, msg); err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport handle message: session %+v: %w",
-				key,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("transport handle message: session %+v:", err.sessionKey))
 	}
 
 	return nil
@@ -820,27 +793,20 @@ func (t *tgTransport) handleCallback(ctx context.Context, cb *tgCallBackQuery) *
 	sess, ok := t.sessionMap[key]
 	t.sessionMapLock.Unlock()
 	if !ok {
-		return newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"transport handle callback: session not found for chat %d thread %d",
 				key.chatId,
 				key.threadId,
 			),
-			&key,
-		)
+			sessionKey: &key,
+			clientMsg:  "session not found",
+		}
 	}
 
 	if err := sess.cbRouter(ctx, cb); err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport handle callback: session %+v: %w",
-				key,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("transport handle callback: session %+v:", err.sessionKey))
 	}
 
 	return nil
@@ -854,24 +820,28 @@ func (t *tgTransport) handleError(ctx context.Context, err *transportErr) *trans
 			reqEndpoint: tgSendNewMessageEP,
 			ChatId:      err.sessionKey.chatId,
 			ThreadId:    err.sessionKey.threadId,
-			Text:        "client error : " + err.Unwrap().Error(),
+			Text:        err.clientMsg,
 		}
 		go func() {
-			_, _ = t.sendMessageWithRetry(ctx, errMsg)
+
+			log.Printf("trying to send client error")
+
+			_, cErr := t.send(ctx, errMsg)
+
+			if cErr != nil {
+				log.Printf("failed to send client error : %s", cErr.Error())
+			} else {
+				log.Printf("sent client error")
+			}
 		}()
-		// TODO: maybe audit log here
-		t.sessionMapLock.Lock()
-		delete(t.sessionMap, *err.sessionKey)
-		t.sessionMapLock.Unlock()
+
+		if !errors.Is(err, agentErrMaxIterationsExceeded) {
+			t.sessionMapLock.Lock()
+			delete(t.sessionMap, *err.sessionKey)
+			t.sessionMapLock.Unlock()
+		}
 	default:
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"transport handle error: severe error : %w",
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap("transport handle error: severe error: ")
 	}
 	return nil
 }
@@ -887,7 +857,7 @@ func (t *tgTransport) pruneSession(ctx context.Context) {
 			if time.Since(sess.lastActiveAt) > sessionExpiry {
 
 				sess.dataLock.Lock()
-				if sess.data != nil && sess.data.diagnoseMachine != nil {
+				if sess.data != nil && sess.data.diagnoseMachine != nil && sess.data.diagnoseMachine.cancelDiagnosis != nil {
 					sess.data.diagnoseMachine.cancelDiagnosis()
 				}
 				sess.dataLock.Unlock()
@@ -906,19 +876,11 @@ func (t *tgTransport) pruneSession(ctx context.Context) {
 				ThreadId:    e.threadId,
 				Text:        "session expired",
 			}
-			_, err := t.send(ctx, expireMsg)
+			_, err := t.sendMessageWithRetry(ctx, expireMsg)
 			if err != nil {
 				t.pushToChannel(
 					ctx,
-					newTransportErr(
-						err.kind,
-						fmt.Errorf(
-							"transport prune session: notify expired session %+v: %w",
-							e,
-							err.Unwrap(),
-						),
-						err.sessionKey,
-					),
+					err.Wrap(fmt.Sprintf("transport prune session: notify expired session %+v:", err.sessionKey)),
 				)
 			}
 		}
@@ -963,20 +925,8 @@ func (t *tgTransport) cleanup() {
 type transportErr struct {
 	kind       transportErrKind
 	err        error
+	clientMsg  string
 	sessionKey *tgSessionKey
-}
-
-func newTransportErr(kind transportErrKind, err error, sessionKey *tgSessionKey) *transportErr {
-	tErr := &transportErr{
-		kind: kind,
-		err:  err,
-	}
-
-	if sessionKey != nil {
-		tErr.sessionKey = sessionKey
-	}
-
-	return tErr
 }
 
 func (t *transportErr) Unwrap() error {
@@ -985,4 +935,13 @@ func (t *transportErr) Unwrap() error {
 
 func (t *transportErr) Error() string {
 	return t.err.Error()
+}
+
+func (t *transportErr) Wrap(msg string) *transportErr {
+	return &transportErr{
+		kind:       t.kind,
+		err:        fmt.Errorf("%s: %w", msg, t.err),
+		clientMsg:  t.clientMsg,
+		sessionKey: t.sessionKey,
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -74,7 +75,11 @@ func newSession(chatId tgInt, sessionConf *tgSessionConf, ravenConf *ravenConfig
 		cmdHandlerMap:  make(map[tgCmd]func(context.Context, *tgUpdMessage) *transportErr),
 		cbHandlerMap:   make(map[tgSessionStatus]func(context.Context, *tgCallBackQuery) *transportErr),
 
-		lastActiveAt: time.Now(),
+		dataLock: &sync.Mutex{},
+		data:     &tgSessionData{},
+
+		lastActiveLock: &sync.Mutex{},
+		lastActiveAt:   time.Now(),
 
 		ravenConf: ravenConf,
 	}
@@ -88,9 +93,9 @@ func newSession(chatId tgInt, sessionConf *tgSessionConf, ravenConf *ravenConfig
 
 // ------------ Bootstrap ------------
 func (s *tgSession) bootstrapMsgHandler() {
-	// what about tgIdle ?
 	s.messageHandler[tgSessionInit] = s.handleStatusInit
 	s.messageHandler[tgGetDiagnosisQuery] = s.handleStatusGetDiagnosisQuery
+	s.messageHandler[tgIdle] = s.handleStatusIdle
 }
 
 func (s *tgSession) bootstrapCmd() {
@@ -102,60 +107,78 @@ func (s *tgSession) bootstrapCb() {
 }
 
 // -------------- handle messages ------------
-// s.status can never be invalid
+
 func (s *tgSession) msgRouter(ctx context.Context, msg *tgUpdMessage) *transportErr {
 	defer s.updateLastActive()
-	fn, _ := s.messageHandler[s.status]
+	fn, ok := s.messageHandler[s.status]
+	if !ok {
+		return nil
+	}
 	return fn(ctx, msg)
 }
 
 func (s *tgSession) handleStatusInit(ctx context.Context, msg *tgUpdMessage) *transportErr {
 
 	defer s.updateLastActive()
-	if len(msg.Entities) != 1 {
-		err := fmt.Errorf(
-			"session handle status init: please use ONE of supported raven commands",
-		)
-		return newTransportErr(
-			transportErrClient,
-			err,
-			&tgSessionKey{
+
+	if len(msg.Entities) == 0 {
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
+				"session handle status init: please use ONE of supported raven commands",
+			),
+			sessionKey: &tgSessionKey{
 				chatId:   s.chatId,
 				threadId: s.threadId,
 			},
-		)
+			clientMsg: "please use raven commands",
+		}
+	}
+
+	if len(msg.Entities) > 1 {
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
+				"session handle status init: please use ONE of supported raven commands",
+			),
+			sessionKey: &tgSessionKey{
+				chatId:   s.chatId,
+				threadId: s.threadId,
+			},
+			clientMsg: "please use ONE of supported raven commands",
+		}
 	}
 
 	entity := msg.Entities[0]
 	if entity.Type != string(tgEntityCmd) {
-		err := fmt.Errorf(
-			"session handle status init: please use raven commands",
-		)
-		return newTransportErr(
-			transportErrClient,
-			err,
-			&tgSessionKey{
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
+				"session handle status init: please use raven commands",
+			),
+			sessionKey: &tgSessionKey{
 				chatId:   s.chatId,
 				threadId: s.threadId,
 			},
-		)
+			clientMsg: "please use raven commands",
+		}
 	}
 
 	if entity.Offset != 0 {
-		err := fmt.Errorf(
-			"session handle status init: please use command format: /command <arg>",
-		)
-		return newTransportErr(
-			transportErrClient,
-			err,
-			&tgSessionKey{
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
+				"session handle status init: please use command format: /command <arg>",
+			),
+			sessionKey: &tgSessionKey{
 				chatId:   s.chatId,
 				threadId: s.threadId,
 			},
-		)
+			clientMsg: "please use command format: /command <arg>",
+		}
 	}
 
-	cmd := msg.Text[0:entity.Length]
+	cmd := msg.Text[1:entity.Length]
 
 	return s.cmdRouter(ctx, tgCmd(cmd), msg)
 }
@@ -168,6 +191,20 @@ func (s *tgSession) handleStatusGetDiagnosisQuery(ctx context.Context, msg *tgUp
 	return s.opDiagnoseMachine(ctx)
 }
 
+func (s *tgSession) handleStatusIdle(ctx context.Context, msg *tgUpdMessage) *transportErr {
+
+	clientMsg := &tgNewMessage{
+		reqEndpoint: tgSendNewMessageEP,
+		ChatId:      msg.Chat.Id,
+		ThreadId:    msg.MessageThreadId,
+		Text:        "start new investigation from main chat in separate thread",
+	}
+
+	_, err := s.transport.sendMessageWithRetry(ctx, clientMsg)
+
+	return err
+}
+
 // ----------- handle commands ----------------
 func (s *tgSession) cmdRouter(ctx context.Context, cmd tgCmd, msg *tgUpdMessage) *transportErr {
 
@@ -175,19 +212,18 @@ func (s *tgSession) cmdRouter(ctx context.Context, cmd tgCmd, msg *tgUpdMessage)
 
 	fn, ok := s.cmdHandlerMap[cmd]
 	if !ok {
-		err := fmt.Errorf(
-			"session command router: command %q not supported, please use a valid command",
-			cmd,
-		)
-
-		return newTransportErr(
-			transportErrClient,
-			err,
-			&tgSessionKey{
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
+				"session command router: command %q not supported, please use a valid command",
+				cmd,
+			),
+			sessionKey: &tgSessionKey{
 				chatId:   s.chatId,
 				threadId: s.threadId,
 			},
-		)
+			clientMsg: fmt.Sprintf("command %q not supported", cmd),
+		}
 	}
 
 	return fn(ctx, msg)
@@ -203,27 +239,20 @@ func (s *tgSession) cmdDiagnose(ctx context.Context, msg *tgUpdMessage) *transpo
 	machine, err := s.registry.getVm(machineName)
 
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return newTransportErr(
-			transportErrFatal,
-			fmt.Errorf("session diagnose command: get machine %q: %w", machineName, err),
-			nil,
-		)
+		return &transportErr{
+			kind: transportErrFatal,
+			err:  fmt.Errorf("session diagnose command: get machine %q: %w", machineName, err),
+		}
 	}
 
 	if err != nil && errors.Is(err, sql.ErrNoRows) {
 
+		log.Printf("getting machine names")
 		machineNames, err := s.getMachineNames()
 		if err != nil {
-			return newTransportErr(
-				err.kind,
-				fmt.Errorf(
-					"session diagnose command: get machine names after machine %q not found: %w",
-					machineName,
-					err.Unwrap(),
-				),
-				err.sessionKey,
-			)
+			return err.Wrap(fmt.Sprintf("session diagnose command: get machine names after machine %q not found:", machineName))
 		}
+		log.Printf("got machine names")
 
 		return s.sendNewMachineKeyboard(ctx, machineNames)
 	}
@@ -237,11 +266,10 @@ func (s *tgSession) getMachineNames() ([]string, *transportErr) {
 
 	machines, err := s.registry.listVm()
 	if err != nil {
-		return nil, newTransportErr(
-			transportErrFatal,
-			fmt.Errorf("session get machine names: list machines: %w", err),
-			nil,
-		)
+		return nil, &transportErr{
+			kind: transportErrFatal,
+			err:  fmt.Errorf("session get machine names: list machines: %w", err),
+		}
 	}
 
 	var machineNames []string
@@ -260,7 +288,7 @@ func (s *tgSession) sendNewMachineKeyboard(ctx context.Context, machineNames []s
 		totalPages++
 	}
 
-	keyboardKeys := s.utilMachinesKeyboard(machineNames, 1, totalPages)
+	keyboardKeys := s.utilMachinesKeyboard(machineNames[:5], 1, totalPages)
 
 	payload := &tgNewMessage{
 		reqEndpoint: tgSendNewMessageEP,
@@ -271,17 +299,14 @@ func (s *tgSession) sendNewMachineKeyboard(ctx context.Context, machineNames []s
 		},
 	}
 
+	log.Printf("built keyboard, sending it")
+
 	res, err := s.transport.sendMessageWithRetry(ctx, payload)
 	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"session send machine keyboard: send keyboard message: %w",
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap("session send machine keyboard: send keyboard message:")
 	}
+
+	log.Printf("sent keyboard")
 
 	s.dataLock.Lock()
 	s.data.selectMachine = &tgSelectMachineData{
@@ -299,9 +324,10 @@ func (s *tgSession) sendNewMachineKeyboard(ctx context.Context, machineNames []s
 // -------------- handle callbacks ---------------
 func (s *tgSession) cbRouter(ctx context.Context, cb *tgCallBackQuery) *transportErr {
 	defer s.updateLastActive()
-
-	fn, _ := s.cbHandlerMap[s.status]
-
+	fn, ok := s.cbHandlerMap[s.status]
+	if !ok {
+		return nil
+	}
 	return fn(ctx, cb)
 }
 
@@ -311,6 +337,8 @@ func (s *tgSession) cbSelectMachine(ctx context.Context, cb *tgCallBackQuery) *t
 	data := cb.Data
 
 	switch {
+	case data == noOp:
+		return nil
 	case strings.HasPrefix(data, "nav:next"):
 
 		pageStr := strings.TrimPrefix(data, "nav:next:curr:")
@@ -337,31 +365,32 @@ func (s *tgSession) cbSelectMachine(ctx context.Context, cb *tgCallBackQuery) *t
 	default:
 
 		machine, err := s.registry.getVm(data)
+
 		if err != nil {
 
 			if errors.Is(err, sql.ErrNoRows) {
-				return newTransportErr(
-					transportErrClient,
-					fmt.Errorf(
+				return &transportErr{
+					kind: transportErrClient,
+					err: fmt.Errorf(
 						"session select machine callback: selected machine %q no longer exists",
 						data,
 					),
-					&tgSessionKey{
+					sessionKey: &tgSessionKey{
 						chatId:   s.chatId,
 						threadId: s.threadId,
 					},
-				)
+					clientMsg: fmt.Sprintf("selected machine %q no longer exists", data),
+				}
 			}
 
-			return newTransportErr(
-				transportErrFatal,
-				fmt.Errorf(
+			return &transportErr{
+				kind: transportErrFatal,
+				err: fmt.Errorf(
 					"session select machine callback: get machine %q: %w",
 					data,
 					err,
 				),
-				nil,
-			)
+			}
 		}
 		return s.opInitMachineDiagnosis(ctx, machine)
 	}
@@ -389,16 +418,7 @@ func (s *tgSession) editMachineKeyboard(ctx context.Context, machineNames []stri
 
 	_, err := s.transport.sendMessageWithRetry(ctx, payload)
 	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"session edit machine keyboard: edit keyboard page %d/%d: %w",
-				currPage,
-				totalPages,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("session edit machine keyboard: edit keyboard page %d/%d", currPage, totalPages))
 	}
 
 	return nil
@@ -413,15 +433,7 @@ func (s *tgSession) opInitMachineDiagnosis(ctx context.Context, m *machine) *tra
 
 	err := s.createThread(ctx, m.Name)
 	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"session init machine diagnosis: create thread for machine %q: %w",
-				m.Name,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("session init machine diagnosis: create thread for machine %q: ", m.Name))
 	}
 
 	payload := &tgNewMessage{
@@ -433,15 +445,7 @@ func (s *tgSession) opInitMachineDiagnosis(ctx context.Context, m *machine) *tra
 
 	_, err = s.transport.sendMessageWithRetry(ctx, payload)
 	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"session init machine diagnosis: send investigation prompt for machine %q: %w",
-				m.Name,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("session init machine diagnosis: send investigation prompt for machine %q:", m.Name))
 	}
 
 	s.status = tgGetDiagnosisQuery
@@ -467,17 +471,17 @@ func (s *tgSession) opDiagnoseMachine(ctx context.Context) *transportErr {
 	}
 	s.dataLock.Unlock()
 
+	sessKey := &tgSessionKey{
+		chatId:   s.chatId,
+		threadId: s.threadId,
+	}
+
 	agent, err := newAgent(ctx, agentConf, s.ravenConf)
 	if err != nil {
 		return agentToTransportErr(
-			newAgentError(
-				err.kind,
-				fmt.Errorf("create agent: %w", err.Unwrap()),
-			),
-			&tgSessionKey{
-				chatId:   s.chatId,
-				threadId: s.threadId,
-			},
+			err.Wrap("create agent: "),
+			sessKey,
+			"failed to create agent",
 		)
 	}
 
@@ -513,7 +517,10 @@ func (s *tgSession) opDiagnoseMachine(ctx context.Context) *transportErr {
 
 	select {
 	case <-diagCtx.Done():
-		return nil
+		return &transportErr{
+			kind: transportErrTerminate,
+			err:  diagCtx.Err(),
+		}
 	case updErr := <-updErrCh:
 		return updErr
 	case res := <-agentDoneCh:
@@ -523,33 +530,42 @@ func (s *tgSession) opDiagnoseMachine(ctx context.Context) *transportErr {
 	}
 
 	if err != nil {
+		if errors.Is(err, agentErrMaxIterationsExceeded) {
+
+			if out != nil && out.DiagnosisResult != nil {
+				cancelDiagCtx()
+
+				err := s.sendMachineDiagnosisResult(ctx, out.DiagnosisResult)
+				if err != nil {
+					return err.Wrap(fmt.Sprintf("send diagnosis result for machine %q:", agentConf.Machine.Name))
+				}
+
+				s.status = tgIdle
+				s.dataLock.Lock()
+				s.data.diagnoseMachine = nil
+				s.dataLock.Unlock()
+			}
+			return agentToTransportErr(
+				err.Wrap("run diagnosis agent:"),
+				sessKey,
+				"investigation stopped after reaching the maximum iteration limit; review results carefully",
+			)
+		}
+
 		return agentToTransportErr(
-			newAgentError(
-				err.kind,
-				fmt.Errorf("run diagnosis agent: %w", err.Unwrap()),
-			),
-			&tgSessionKey{
-				chatId:   s.chatId,
-				threadId: s.threadId,
-			},
+			err.Wrap("run diagnosis agent:"),
+			sessKey,
+			"agent failed while running",
 		)
 	}
 
-	if out.DiagnosisResult != nil {
+	if out != nil && out.DiagnosisResult != nil {
 
 		cancelDiagCtx()
 
 		err := s.sendMachineDiagnosisResult(ctx, out.DiagnosisResult)
 		if err != nil {
-			return newTransportErr(
-				err.kind,
-				fmt.Errorf(
-					"send diagnosis result for machine %q: %w",
-					agentConf.Machine.Name,
-					err.Unwrap(),
-				),
-				err.sessionKey,
-			)
+			return err.Wrap(fmt.Sprintf("send diagnosis result for machine %q:", agentConf.Machine.Name))
 		}
 
 		s.status = tgIdle
@@ -586,14 +602,7 @@ func (s *tgSession) sendDiagnosisUpdate(ctx context.Context, upd string) *transp
 
 		res, err := s.transport.send(ctx, payload)
 		if err != nil {
-			return newTransportErr(
-				err.kind,
-				fmt.Errorf(
-					"send diagnosis update: send initial update message: %w",
-					err.Unwrap(),
-				),
-				err.sessionKey,
-			)
+			return err.Wrap("send diagnosis update: send initial update message:")
 		}
 
 		s.dataLock.Lock()
@@ -613,20 +622,15 @@ func (s *tgSession) sendDiagnosisUpdate(ctx context.Context, upd string) *transp
 
 	s.dataLock.Unlock()
 	_, err := s.transport.send(ctx, payload)
-	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"send diagnosis update: edit update message %d: %w",
-				s.data.diagnoseMachine.updateMsgId,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
-	}
 
 	s.dataLock.Lock()
+
+	if err != nil {
+		return err.Wrap(fmt.Sprintf("send diagnosis update: edit update message %d: ", s.data.diagnoseMachine.updateMsgId))
+	}
+
 	s.data.diagnoseMachine.cntUpdates++
+
 	s.dataLock.Unlock()
 
 	return nil
@@ -703,27 +707,29 @@ func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnos
 		s.ravenConf.tempDir,
 	)
 	if err != nil {
-		return newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"send machine diagnosis result: generate investigation report pdf: %w",
 				err,
 			),
-			sessKey,
-		)
+			sessionKey: sessKey,
+			clientMsg:  "failed to generate investigation report",
+		}
 	}
 
 	reportPdf, err := os.Open(reportLoc)
 	if err != nil {
-		return newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"send machine diagnosis result: open investigation report pdf %q: %w",
 				reportLoc,
 				err,
 			),
-			sessKey,
-		)
+			sessionKey: sessKey,
+			clientMsg:  "failed to generate investigation report",
+		}
 	}
 	defer os.Remove(reportLoc)
 	defer reportPdf.Close()
@@ -738,14 +744,7 @@ func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnos
 		reportPdf,
 	)
 	if tErr != nil {
-		return newTransportErr(
-			tErr.kind,
-			fmt.Errorf(
-				"send machine diagnosis result: send investigation report pdf: %w",
-				tErr.Unwrap(),
-			),
-			tErr.sessionKey,
-		)
+		return tErr.Wrap("send machine diagnosis result: send investigation report pdf: ")
 	}
 
 	historyData := &pdfTemplateData{
@@ -761,27 +760,29 @@ func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnos
 		s.ravenConf.tempDir,
 	)
 	if err != nil {
-		return newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"send machine diagnosis result: generate investigation history pdf: %w",
 				err,
 			),
-			sessKey,
-		)
+			sessionKey: sessKey,
+			clientMsg:  "failed to generate investigation history",
+		}
 	}
 
 	historyPdf, err := os.Open(historyLoc)
 	if err != nil {
-		return newTransportErr(
-			transportErrClient,
-			fmt.Errorf(
+		return &transportErr{
+			kind: transportErrClient,
+			err: fmt.Errorf(
 				"send machine diagnosis result: open investigation history pdf %q: %w",
 				historyLoc,
 				err,
 			),
-			sessKey,
-		)
+			sessionKey: sessKey,
+			clientMsg:  "failed to generate investigation history",
+		}
 	}
 	defer os.Remove(historyLoc)
 	defer historyPdf.Close()
@@ -796,14 +797,7 @@ func (s *tgSession) sendMachineDiagnosisResult(ctx context.Context, res *diagnos
 		historyPdf,
 	)
 	if tErr != nil {
-		return newTransportErr(
-			tErr.kind,
-			fmt.Errorf(
-				"send machine diagnosis result: send investigation history pdf: %w",
-				tErr.Unwrap(),
-			),
-			tErr.sessionKey,
-		)
+		return tErr.Wrap("send machine diagnosis result: send investigation history pdf: ")
 	}
 
 	return nil
@@ -857,15 +851,7 @@ func (s *tgSession) createThread(ctx context.Context, name string) *transportErr
 
 	threadId, err := s.transport.createThreadWithRetry(ctx, s.chatId, name)
 	if err != nil {
-		return newTransportErr(
-			err.kind,
-			fmt.Errorf(
-				"session create thread: create telegram thread for machine %q: %w",
-				name,
-				err.Unwrap(),
-			),
-			err.sessionKey,
-		)
+		return err.Wrap(fmt.Sprintf("session create thread: create telegram thread for machine %q:", name))
 	}
 
 	s.threadId = *threadId

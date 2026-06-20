@@ -14,6 +14,7 @@ type tgInt int64
 
 type tgUser struct {
 	Id tgInt `json:"id"`
+	IsBot bool `json:"is_bot"`
 }
 
 type tgChat struct {

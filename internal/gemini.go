@@ -242,34 +242,35 @@ const (
 )
 
 type gemini struct {
-	client       *genai.Client
-	systemPrompt string
-	history      []*genai.Content
-	ravenConf    *ravenConfig
+	client    *genai.Client
+	history   []*genai.Content
+	ravenConf *ravenConfig
 }
 
-func newGemini(ctx context.Context, systemPrompt string, apiKey string) (*gemini, *agentErr) {
+func newGemini(ctx context.Context, apiKey string) (*gemini, *agentErr) {
 
 	client, err := genai.NewClient(ctx, &genai.ClientConfig{
 		APIKey:  apiKey,
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
-		return nil, newAgentError(agentErrFatal, fmt.Errorf("gemini: new client: %w", err))
+		return nil, &agentErr{
+			kind: agentErrFatal,
+			err:  fmt.Errorf("gemini: new client: %w", err),
+		}
 	}
 
 	gemini := &gemini{
-		client:       client,
-		systemPrompt: systemPrompt,
-		history:      []*genai.Content{},
+		client:  client,
+		history: []*genai.Content{},
 	}
 
 	return gemini, nil
 }
 
-func (g *gemini) getConf() *genai.GenerateContentConfig {
+func (g *gemini) getConf(systemPromptStr string) *genai.GenerateContentConfig {
 
-	sysPrompt := genai.NewContentFromText(g.systemPrompt, genai.RoleUser)
+	sysPrompt := genai.NewContentFromText(systemPromptStr, genai.RoleUser)
 
 	return &genai.GenerateContentConfig{
 		SystemInstruction: sysPrompt,
@@ -391,19 +392,31 @@ func (g *gemini) handleError(err error) *agentErr {
 		switch apiErr.Status {
 
 		case gemPermissionDenied, gemFailedPrecondition, gemInvalidArgument, gemNotFound:
-			return newAgentError(agentErrFatal, fmt.Errorf("gemini: %w", err))
+			return &agentErr{
+				kind: agentErrFatal,
+				err:  fmt.Errorf("gemini: %w", err),
+			}
 
 		case gemResourceExhausted, gemInternalServerErr, gemUnavailable, gemDeadlineExceeded:
-			return newAgentError(agentErrLlmRetry, fmt.Errorf("gemini: %w", err))
+			return &agentErr{
+				agentErrLlmRetry,
+				fmt.Errorf("gemini: %w", err),
+			}
 
 		default:
-			return newAgentError(agentErrTerminate, fmt.Errorf("gemini: unhandled api error status: %w", err))
+			return &agentErr{
+				kind: agentErrTerminate,
+				err:  fmt.Errorf("gemini: unhandled api error status: %w", err),
+			}
 		}
 	}
-	return newAgentError(agentErrTerminate, fmt.Errorf("gemini: %w", err))
+	return &agentErr{
+		kind: agentErrTerminate,
+		err:  fmt.Errorf("gemini: %w", err),
+	}
 }
 
-func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.GenerateContentResponse, *agentErr) {
+func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptStr string) (*genai.GenerateContentResponse, *agentErr) {
 
 	var (
 		resp *genai.GenerateContentResponse
@@ -414,7 +427,7 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.Ge
 
 	for i := range MaxRetry {
 
-		resp, err = g.client.Models.GenerateContent(ctx, gemModel, contents, g.getConf())
+		resp, err = g.client.Models.GenerateContent(ctx, gemModel, contents, g.getConf(sysPromptStr))
 
 		if err == nil {
 			break
@@ -428,7 +441,7 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content) (*genai.Ge
 
 		select {
 		case <-ctx.Done():
-			return nil, nil
+			return nil, &agentErr{kind: agentErrTerminate, err: ctx.Err()}
 		case <-time.After(sleep):
 		}
 
@@ -448,7 +461,7 @@ const (
 	gemFinishReasonStop = "STOP"
 )
 
-func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *agentErr) {
+func (g *gemini) generate(ctx context.Context, parts []*llmPart, sysPromptStr string) (*llmMessage, *agentErr) {
 
 	var contents []*genai.Content
 
@@ -458,23 +471,23 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart) (*llmMessage, *
 
 	contents = append(contents, g.buildContent(parts)...)
 
-	resp, agentErr := g.call(ctx, contents)
+	resp, aErr := g.call(ctx, contents, sysPromptStr)
 
-	if agentErr != nil {
-		if agentErr.kind == agentErrLlmRetry {
-			return nil, newAgentError(agentErrTerminate, agentErr.err)
+	if aErr != nil {
+		if aErr.kind == agentErrLlmRetry {
+			return nil, &agentErr{kind: agentErrTerminate, err: aErr.err}
 		}
-		return nil, agentErr
+		return nil, aErr
 	}
 
 	g.history = contents
 
 	if len(resp.Candidates) == 0 {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("gemini: no response candidates"))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("gemini: no response candidates")}
 	}
 
 	if len(resp.Candidates[0].FinishReason) != 0 && resp.Candidates[0].FinishReason != gemFinishReasonStop {
-		return nil, newAgentError(agentErrTerminate, fmt.Errorf("gemini: unexpected finish reason: %s", resp.Candidates[0].FinishReason))
+		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("gemini: unexpected finish reason: %s", resp.Candidates[0].FinishReason)}
 	}
 
 	g.history = append(g.history, resp.Candidates[0].Content)

@@ -1,4 +1,5 @@
 package raven
+
 import "fmt"
 
 func truncate(s string, n int) string {
@@ -31,12 +32,20 @@ func ordinal(n int) string {
 	}
 }
 
-func agentToTransportErr(err *agentErr, sessionKey *tgSessionKey) *transportErr {
+func agentToTransportErr(err *agentErr, sessionKey *tgSessionKey, clientMsg string) *transportErr {
 	switch err.kind {
-		case agentErrFatal :
-			return newTransportErr(transportErrFatal, err.Unwrap(), nil)
-		case agentErrTerminate, agentErrLlmRetry :
-			return newTransportErr(transportErrClient, err.Unwrap(), sessionKey)
+	case agentErrFatal:
+		return &transportErr{
+			kind: transportErrFatal,
+			err:  err.Unwrap(),
+		}
+	case agentErrTerminate, agentErrLlmRetry:
+		return &transportErr{
+			kind:       transportErrClient,
+			err:        err.Unwrap(),
+			sessionKey: sessionKey,
+			clientMsg:  clientMsg,
+		}
 	}
 	return nil
 }

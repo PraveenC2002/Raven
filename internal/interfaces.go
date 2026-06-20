@@ -21,7 +21,7 @@ type Transport interface {
 // type Agent interface{}
 
 type LLM interface {
-	generate(context.Context, []*llmPart) (*llmMessage, *agentErr)
+	generate(context.Context, []*llmPart, string) (*llmMessage, *agentErr)
 }
 
 type LLMTool interface {
