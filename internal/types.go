@@ -3,7 +3,6 @@ package raven
 import (
 	"regexp"
 	"time"
-
 	"github.com/google/uuid"
 )
 
@@ -13,8 +12,8 @@ type tgInt int64
 // ----------------- Receive types --------------------------
 
 type tgUser struct {
-	Id tgInt `json:"id"`
-	IsBot bool `json:"is_bot"`
+	Id    tgInt `json:"id"`
+	IsBot bool  `json:"is_bot"`
 }
 
 type tgChat struct {
@@ -180,42 +179,44 @@ type sshOutput struct {
 
 // shell types
 type shellFlag struct {
-	Name         string `toml:"name"`
-	TakesVal     bool   `toml:"takesVal"`
-	Glued        bool   `toml:"glued"`
-	ValuePattern string `toml:"value"`
+	Name         string `yaml:"name" json:"name"`
+	TakesVal     bool   `yaml:"takesVal"`
+	Glued        bool   `yaml:"glued"`
+	ValuePattern string `yaml:"value"`
 	ValueRegex   *regexp.Regexp
+	Value        string `yaml:"-" json:"value,omitempty"`
 }
 
 type shellPositional struct {
-	Required           bool     `toml:"required"`
-	Index              int      `toml:"index"`
-	AcceptPattern      []string `toml:"acceptPattern"`
+	Required           bool     `yaml:"required"`
+	Index              int      `yaml:"index" json:"index"`
+	AcceptPattern      []string `yaml:"acceptPattern"`
 	AcceptPatternRegex []*regexp.Regexp
-	RejectPattern      []string `toml:"rejectPattern"`
+	RejectPattern      []string `yaml:"rejectPattern"`
 	RejectPatternRegex []*regexp.Regexp
-	RejectList         []string `toml:"rejectList"`
+	RejectList         []string `yaml:"rejectList"`
+	Value              string   `yaml:"-" json:"value"`
 }
 
 type shellCommand struct {
-	Name        string       `toml:"name"`
-	Description string       `toml:"description"`
-	Flags       []*shellFlag `toml:"flags"`
+	Name        string       `yaml:"name"`
+	Description string       `yaml:"description"`
+	Flags       []*shellFlag `yaml:"flags"`
 	FlagsMap    map[string]*shellFlag
-	Positionals []*shellPositional `toml:"positionals"`
-	Template    string             `toml:"template"`
+	Positionals []*shellPositional `yaml:"positionals"`
+	Template    string             `yaml:"template"`
 }
 
 type shellDenyList struct {
-	Exact         []string `toml:"exact"`
-	Patterns      []string `toml:"patterns"`
+	Exact         []string `yaml:"exact"`
+	Patterns      []string `yaml:"patterns"`
 	patternsRegex []*regexp.Regexp
 }
 
 type shellPolicy struct {
-	Commands    []*shellCommand `toml:"commands"`
+	Commands    []*shellCommand `yaml:"commands"`
 	CommandsMap map[string]*shellCommand
-	DenyList    *shellDenyList `toml:"DenyList"`
+	DenyList    *shellDenyList `yaml:"DenyList"`
 }
 
 // llm types
@@ -272,18 +273,13 @@ type llmResponse struct {
 }
 
 // tool types
+
 type remoteSSHFunctionCall struct {
 	Command string `json:"command"`
 
-	Flags []*struct {
-		Name  string `json:"name"`
-		Value string `json:"value,omitempty"`
-	} `json:"flags,omitempty"`
+	Flags []*shellFlag `json:"flags,omitempty"`
 
-	Positionals []*struct {
-		Index int    `json:"index"`
-		Value string `json:"value"`
-	} `json:"positionals,omitempty"`
+	Positionals []*shellPositional `json:"positionals,omitempty"`
 
 	Reason string `json:"reason"`
 	Update string `json:"update"`

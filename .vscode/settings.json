@@ -1,0 +1,6 @@
+{
+    "yaml.schemas": {
+        "http://schemastore.org": "disabled"
+    },
+    "yaml.schemaStore.enable": false
+}

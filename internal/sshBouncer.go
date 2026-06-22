@@ -14,18 +14,18 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/pelletier/go-toml/v2"
+	"gopkg.in/yaml.v3"
 )
 
-//go:embed assets/policies/remoteSSH/defaultShellPolicy.toml
-var defaulShellPolicyToml []byte
+//go:embed assets/policies/remoteSSH/defaultShellPolicy.yaml
+var defaulShellPolicyYaml []byte
 var defaultShellPolicy = func() *shellPolicy {
-	policy, err := compileShellPolicy(bytes.NewBuffer(defaulShellPolicyToml))
+	policy, err := compileShellPolicy(bytes.NewBuffer(defaulShellPolicyYaml))
 	if err != nil {
 		panic(err)
 	}
 	return policy
-} ()
+}()
 
 //go:embed assets/templates/remoteSSH/policy.tmpl
 var shellPolicyTmplRaw string
@@ -35,6 +35,9 @@ var shellPolicyTmpl = func() *template.Template {
 		"add": func(a, b int) int {
 			return a + b
 		},
+		"oneline": func(s string) string {
+			return strings.Join(strings.Fields(s), " ")
+		},
 	}
 
 	return template.Must(
@@ -43,7 +46,7 @@ var shellPolicyTmpl = func() *template.Template {
 			Funcs(funcMap).
 			Parse(shellPolicyTmplRaw),
 	)
-} ()
+}()
 
 type sshBouncer struct {
 	Policy *shellPolicy
@@ -52,7 +55,7 @@ type sshBouncer struct {
 func compileShellPolicy(f io.Reader) (*shellPolicy, error) {
 
 	var policy shellPolicy
-	if err := toml.NewDecoder(f).Decode(&policy); err != nil {
+	if err := yaml.NewDecoder(f).Decode(&policy); err != nil {
 		return nil, fmt.Errorf("ssh bouncer : policy parsing error : %w", err)
 	}
 
@@ -122,7 +125,7 @@ func newSSHBouncer() (*sshBouncer, error) {
 		".raven",
 		"policies",
 		"remoteSSH",
-		"ShellPolicy.toml",
+		"shellPolicy.yaml",
 	)
 
 	policy := defaultShellPolicy
@@ -160,12 +163,13 @@ func (b *sshBouncer) checkDenyList(val string) error {
 
 	violationErr := fmt.Errorf("ssh bouncer: value %q is prohibited", val)
 
-	if slices.Contains(b.Policy.DenyList.Exact, val) {
+	cleaned := filepath.Clean(val)
+	if slices.Contains(b.Policy.DenyList.Exact, cleaned) {
 		return violationErr
 	}
 
 	for _, pattern := range b.Policy.DenyList.patternsRegex {
-		if pattern.MatchString(val) {
+		if pattern.MatchString(cleaned) {
 			return violationErr
 		}
 	}
@@ -212,7 +216,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 			return err
 		}
 
-		if fcPos.Index < 1 || fcPos.Index > len(cmd.Positionals) {
+		if fcPos.Index < 0 || fcPos.Index > len(cmd.Positionals)-1 {
 			err = fmt.Errorf("ssh bouncer: positional index %d is not defined for command %q", fcPos.Index, fc.Command)
 			return err
 		}
@@ -225,7 +229,7 @@ func (b *sshBouncer) validate(fc *remoteSSHFunctionCall) error {
 			}
 		}
 
-		posIdx := fcPos.Index - 1
+		posIdx := fcPos.Index
 
 		if slices.Contains(cmd.Positionals[posIdx].RejectList, fcPos.Value) {
 			return fmt.Errorf("ssh bouncer: value %q is prohibited at %s positional on command %q", fcPos.Value, ordinal(posIdx+1), fc.Command)
@@ -296,16 +300,16 @@ func (b *sshBouncer) constructCmd(cmd *remoteSSHFunctionCall) (string, error) {
 	dataMap := make(map[string]string)
 
 	for _, pos := range cmd.Positionals {
-		dataMap[strconv.Itoa(pos.Index)] = pos.Value
+		dataMap[strconv.Itoa(pos.Index)] = shellQuote(pos.Value)
 	}
 
 	for _, f := range cmd.Flags {
 
 		if b.Policy.CommandsMap[cmd.Command].FlagsMap[f.Name].TakesVal {
 			if b.Policy.CommandsMap[cmd.Command].FlagsMap[f.Name].Glued {
-				dataMap[f.Name] = f.Name + "=" + f.Value
+				dataMap[f.Name] = f.Name + "=" + shellQuote(f.Value)
 			} else {
-				dataMap[f.Name] = f.Name + " " + f.Value
+				dataMap[f.Name] = f.Name + " " + shellQuote(f.Value)
 			}
 		} else {
 			dataMap[f.Name] = f.Name
@@ -315,9 +319,9 @@ func (b *sshBouncer) constructCmd(cmd *remoteSSHFunctionCall) (string, error) {
 	cmdTempl := b.Policy.CommandsMap[cmd.Command].Template
 
 	funcMap := template.FuncMap{
-		"flag": func(flags ...string) string {
+		"flag": func(flagStr string) string {
 			var parts []string
-			for _, f := range flags {
+			for _, f := range strings.Fields(flagStr) {
 				if val, ok := dataMap[f]; ok {
 					parts = append(parts, val)
 				}

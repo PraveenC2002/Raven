@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -17,6 +16,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
 )
 
 type tgSessionKey struct {
@@ -110,7 +111,7 @@ func (t *tgTransport) pushToChannel(ctx context.Context, payload any) {
 
 func (t *tgTransport) poll(ctx context.Context) {
 
-	log.Println("started polling")
+	tgTransportLogger.Info("started polling")
 	for {
 
 		params := url.Values{}
@@ -132,7 +133,7 @@ func (t *tgTransport) poll(ctx context.Context) {
 			return
 		}
 
-		log.Printf("sent long poll")
+		tgTransportLogger.Info("sent long poll")
 		res, err := t.client.Do(req)
 		if err != nil {
 
@@ -187,23 +188,23 @@ func (t *tgTransport) poll(ctx context.Context) {
 					msg := upd.Message
 
 					if msg.From.IsBot {
-						log.Printf("bot package")
+						tgTransportLogger.Info("bot package")
 						continue
 					}
 					if err := t.authenticate(msg.From.Id); err != nil {
-						log.Printf("auth failed your id : %d ownerId : %d", msg.From.Id, t.userId)
+						tgTransportLogger.Error("auth failed")
 						continue
 					}
 
 					t.pushToChannel(ctx, msg)
-					log.Printf("pushed messaged : %s", msg.Text)
+					tgTransportLogger.Info("pushed", "message", msg.Text)
 
 				case upd.CallBackQuery != nil:
 
 					cb := upd.CallBackQuery
 
 					if err := t.authenticate(cb.From.Id); err != nil {
-						log.Printf("auth failed your id : %d ownerId : %d", cb.From.Id, t.userId)
+						tgTransportLogger.Error("auth failed")
 						continue
 					}
 
@@ -814,6 +815,7 @@ func (t *tgTransport) handleCallback(ctx context.Context, cb *tgCallBackQuery) *
 
 func (t *tgTransport) handleError(ctx context.Context, err *transportErr) *transportErr {
 
+	tgSessionLogger.Block("Error : ", spew.Sdump(err))
 	switch err.kind {
 	case transportErrClient:
 		errMsg := &tgNewMessage{
@@ -824,14 +826,14 @@ func (t *tgTransport) handleError(ctx context.Context, err *transportErr) *trans
 		}
 		go func() {
 
-			log.Printf("trying to send client error")
+			tgTransportLogger.Error("trying to send client error")
 
 			_, cErr := t.send(ctx, errMsg)
 
 			if cErr != nil {
-				log.Printf("failed to send client error : %s", cErr.Error())
+				tgTransportLogger.Error("failed to send client error", "error", cErr.Error())
 			} else {
-				log.Printf("sent client error")
+				tgTransportLogger.Error("sent client error")
 			}
 		}()
 

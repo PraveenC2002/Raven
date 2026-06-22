@@ -120,6 +120,7 @@ type llmToolName string
 
 const (
 	ToolExecuteSSH llmToolName = "execute_ssh"
+	ToolSubmitReport llmToolName = "submit_report"
 )
 
 type llmToolMode string

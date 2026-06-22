@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	// "github.com/davecgh/go-spew/spew"
 	"google.golang.org/genai"
 )
 
@@ -69,8 +70,24 @@ var gemExecuteSSHDecl = &genai.FunctionDeclaration{
 	},
 }
 
+var gemSubmitReportDecl = &genai.FunctionDeclaration{
+    Name:        "submit_report",
+    Description: "Call this when investigation is complete to submit the final diagnosis report",
+    Parameters: &genai.Schema{
+        Type: genai.TypeObject,
+        Properties: map[string]*genai.Schema{
+            "investigation_report":  gemReportSchema,
+            "investigation_history": gemInvestigationHistorySchema,
+        },
+        Required: []string{"investigation_report", "investigation_history"},
+    },
+}
+
 var gemTools = &genai.Tool{
-	FunctionDeclarations: []*genai.FunctionDeclaration{gemExecuteSSHDecl},
+    FunctionDeclarations: []*genai.FunctionDeclaration{
+        gemExecuteSSHDecl,
+        gemSubmitReportDecl,
+    },
 }
 
 var gemToolActionSchema = &genai.Schema{
@@ -254,6 +271,7 @@ func newGemini(ctx context.Context, apiKey string) (*gemini, *agentErr) {
 		Backend: genai.BackendGeminiAPI,
 	})
 	if err != nil {
+		geminiLogger.Error("gemini creation, line 258: ", "err : ", err.Error())
 		return nil, &agentErr{
 			kind: agentErrFatal,
 			err:  fmt.Errorf("gemini: new client: %w", err),
@@ -276,9 +294,9 @@ func (g *gemini) getConf(systemPromptStr string) *genai.GenerateContentConfig {
 		SystemInstruction: sysPrompt,
 		Temperature:       ptr(gemMaxTemperature),
 		MaxOutputTokens:   gemMaxTokens,
-		ResponseMIMEType:  gemResponseMIMEType,
-		ResponseSchema:    gemResponseSchema,
-		Tools:             []*genai.Tool{gemTools},
+		// ResponseMIMEType:  gemResponseMIMEType,
+		// ResponseSchema: gemResponseSchema,
+		Tools:          []*genai.Tool{gemTools},
 	}
 }
 
@@ -333,10 +351,13 @@ func (g *gemini) buildContent(parts []*llmPart) []*genai.Content {
 
 	content.Parts = geminiParts
 
+	// geminiLogger.Block("Content Builder : ", spew.Sdump([]*genai.Content{content}))
 	return []*genai.Content{content}
 }
 
 func (g *gemini) extractLLMMessage(resp *genai.GenerateContentResponse) *llmMessage {
+
+	// geminiLogger.Block("Generated content : ", spew.Sdump(resp))
 	var msg llmMessage
 
 	if len(resp.Candidates) > 0 {
@@ -427,6 +448,8 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptS
 
 	for i := range MaxRetry {
 
+		geminiLogger.Info("call:", "iteration",  i)
+
 		resp, err = g.client.Models.GenerateContent(ctx, gemModel, contents, g.getConf(sysPromptStr))
 
 		if err == nil {
@@ -437,6 +460,7 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptS
 			}
 		}
 
+		geminiLogger.Warn("sleeping:", "time", min(t, MaxRetryTime))
 		sleep := min(t, MaxRetryTime)
 
 		select {
@@ -463,6 +487,7 @@ const (
 
 func (g *gemini) generate(ctx context.Context, parts []*llmPart, sysPromptStr string) (*llmMessage, *agentErr) {
 
+	geminiLogger.Info("generating")
 	var contents []*genai.Content
 
 	if len(g.history) != 0 {
@@ -477,15 +502,21 @@ func (g *gemini) generate(ctx context.Context, parts []*llmPart, sysPromptStr st
 		if aErr.kind == agentErrLlmRetry {
 			return nil, &agentErr{kind: agentErrTerminate, err: aErr.err}
 		}
+		geminiLogger.Error("generation", "line 489, error", aErr.Error())
 		return nil, aErr
 	}
 
 	g.history = contents
 
 	if len(resp.Candidates) == 0 {
+		geminiLogger.Error("generation:", "line 489, error", "gemini: no response candidates")
 		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("gemini: no response candidates")}
 	}
 
+	if len(resp.Candidates[0].FinishReason) != 0 {
+		geminiLogger.Error("Finished:", "reason", resp.Candidates[0].FinishReason)
+	}
+	
 	if len(resp.Candidates[0].FinishReason) != 0 && resp.Candidates[0].FinishReason != gemFinishReasonStop {
 		return nil, &agentErr{kind: agentErrTerminate, err: fmt.Errorf("gemini: unexpected finish reason: %s", resp.Candidates[0].FinishReason)}
 	}

@@ -1,6 +1,9 @@
 package raven
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 func truncate(s string, n int) string {
 	r := []rune(s)
@@ -48,4 +51,8 @@ func agentToTransportErr(err *agentErr, sessionKey *tgSessionKey, clientMsg stri
 		}
 	}
 	return nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
