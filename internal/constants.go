@@ -25,9 +25,9 @@ const (
 
 // networking
 const (
-	BaseRetryBackoffTime = 200 * time.Millisecond
-	MaxRetry             = 5
-	MaxRetryTime         = 1000 * 10 * time.Millisecond
+	baseRetryBackoffTime = 200 * time.Millisecond
+	maxRetry             = 5
+	maxRetryTime         = 1000 * 10 * time.Millisecond
 )
 
 // Transport
@@ -116,10 +116,16 @@ const (
 
 var agentErrMaxIterationsExceeded = errors.New("maximum iterations exceeded")
 
+const (
+	llmBackOff      = 1 * time.Second
+	llmMaxRetries   = 8
+	llmMaxRetryTime = 30 * time.Second
+)
+
 type llmToolName string
 
 const (
-	ToolExecuteSSH llmToolName = "execute_ssh"
+	ToolExecuteSSH   llmToolName = "execute_ssh"
 	ToolSubmitReport llmToolName = "submit_report"
 )
 

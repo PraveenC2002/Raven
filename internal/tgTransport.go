@@ -326,9 +326,9 @@ func (t *tgTransport) createThreadWithRetry(ctx context.Context, chatId tgInt, n
 		err      *transportErr
 	)
 
-	backoff := BaseRetryBackoffTime
+	backoff := baseRetryBackoffTime
 
-	for i := 0; i < MaxRetry; i++ {
+	for i := 0; i < maxRetry; i++ {
 
 		threadID, err = t.newThread(ctx, chatId, name)
 
@@ -336,7 +336,7 @@ func (t *tgTransport) createThreadWithRetry(ctx context.Context, chatId tgInt, n
 			break
 		}
 
-		sleep := min(backoff, MaxRetryTime)
+		sleep := min(backoff, maxRetryTime)
 
 		select {
 		case <-ctx.Done():
@@ -348,8 +348,8 @@ func (t *tgTransport) createThreadWithRetry(ctx context.Context, chatId tgInt, n
 		case <-time.After(sleep):
 		}
 
-		if backoff < MaxRetryTime {
-			backoff = BaseRetryBackoffTime *
+		if backoff < maxRetryTime {
+			backoff = baseRetryBackoffTime *
 				time.Duration(1<<(i+1))
 		}
 	}
@@ -444,9 +444,9 @@ func (t *tgTransport) sendMessageWithRetry(ctx context.Context, payload tgSendRe
 		res *tgSendMessageResponse
 	)
 
-	rtime := BaseRetryBackoffTime
+	rtime := baseRetryBackoffTime
 
-	for i := 0; i < MaxRetry; i++ {
+	for i := 0; i < maxRetry; i++ {
 
 		res, err = t.send(ctx, payload)
 
@@ -454,7 +454,7 @@ func (t *tgTransport) sendMessageWithRetry(ctx context.Context, payload tgSendRe
 			break
 		}
 
-		sleep := min(rtime, MaxRetryTime)
+		sleep := min(rtime, maxRetryTime)
 		select {
 		case <-ctx.Done():
 			return nil, &transportErr{
@@ -464,8 +464,8 @@ func (t *tgTransport) sendMessageWithRetry(ctx context.Context, payload tgSendRe
 		case <-time.After(sleep):
 		}
 
-		if rtime < MaxRetryTime {
-			rtime = BaseRetryBackoffTime * time.Duration((1 << (i + 1)))
+		if rtime < maxRetryTime {
+			rtime = baseRetryBackoffTime * time.Duration((1 << (i + 1)))
 		}
 	}
 
@@ -619,9 +619,9 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 		res *tgSendMessageResponse
 	)
 
-	rtime := BaseRetryBackoffTime
+	rtime := baseRetryBackoffTime
 
-	for i := 0; i < MaxRetry; i++ {
+	for i := 0; i < maxRetry; i++ {
 
 		_, fErr := file.Seek(0, 0)
 		if fErr != nil {
@@ -646,7 +646,7 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 			break
 		}
 
-		sleep := min(rtime, MaxRetryTime)
+		sleep := min(rtime, maxRetryTime)
 		select {
 		case <-ctx.Done():
 			return nil, &transportErr{
@@ -656,8 +656,8 @@ func (t *tgTransport) sendDocWithRetry(ctx context.Context, d *tgDocInfo, file *
 		case <-time.After(sleep):
 		}
 
-		if rtime < MaxRetryTime {
-			rtime = BaseRetryBackoffTime * time.Duration((1 << (i + 1)))
+		if rtime < maxRetryTime {
+			rtime = baseRetryBackoffTime * time.Duration((1 << (i + 1)))
 		}
 	}
 

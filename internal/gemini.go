@@ -444,9 +444,9 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptS
 		err  error
 	)
 
-	t := BaseRetryBackoffTime
+	t := baseRetryBackoffTime
 
-	for i := range MaxRetry {
+	for i := range maxRetry {
 
 		geminiLogger.Info("call:", "iteration",  i)
 
@@ -460,8 +460,9 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptS
 			}
 		}
 
-		geminiLogger.Warn("sleeping:", "time", min(t, MaxRetryTime))
-		sleep := min(t, MaxRetryTime)
+		geminiLogger.Warn("sleeping:", "time", min(t, maxRetryTime))
+		sleep := min(t, maxRetryTime)
+		
 
 		select {
 		case <-ctx.Done():
@@ -469,8 +470,8 @@ func (g *gemini) call(ctx context.Context, contents []*genai.Content, sysPromptS
 		case <-time.After(sleep):
 		}
 
-		if t < MaxRetryTime {
-			t = BaseRetryBackoffTime * time.Duration((1 << (i + 1)))
+		if t < maxRetryTime {
+			t = baseRetryBackoffTime * time.Duration((1 << (i + 1)))
 		}
 	}
 
